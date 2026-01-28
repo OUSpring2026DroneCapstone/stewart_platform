@@ -1,0 +1,16 @@
+{
+  "folders": [
+	{
+		"path": "../ArduinoMega2560"
+	},
+	{
+		"name": "ESP32Arduino",
+		"path": "../ESP32Arduino"
+	},
+	{
+		"name": "stewart_platform",
+		"path": "."
+	}
+],
+  "settings": {}
+}
