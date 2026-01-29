@@ -165,14 +165,17 @@ void loop() {
                 ax = (ax > dead) ? 1.0f : (ax < -dead ? -1.0f : 0.0f);
                 ay = (ay > dead) ? 1.0f : (ay < -dead ? -1.0f : 0.0f);
                 az = (az > dead) ? 1.0f : (az < -dead ? -1.0f : 0.0f);
+                // Force single-axis only: if both pressed, prefer horizontal (X)
+                if (ax != 0.0f && ay != 0.0f) {
+                    ay = 0.0f;
+                }
                 // Map axes to inches and degrees
                 // No D-pad flag logic; use ax/ay/az directly
-
-                // Build orientation: ignore 'azi' for tilt to avoid unintended rotation
-                Quaternion tilt = azi_alt_to_rot(0.0f, alt);
-                float yaw_rad_half = (yaw * PI / 180.0f) * 0.5f;
-                Quaternion q_yaw(cos(yaw_rad_half), 0, 0, sin(yaw_rad_half));
-                Quaternion q_target = tilt * q_yaw;
+                
+                // D-pad mode: ignore any rotation entirely (always keep flat)
+                alt = 0.0f;
+                yaw = 0.0f;
+                Quaternion q_target = Quaternion(1, 0, 0, 0); // identity rotation
 
                 // Incremental stepping: add a small step to current target each frame
                 const float STEP = 0.02f;   // 0.02 in per frame (~0.6 in/s @ 30Hz)
@@ -192,10 +195,11 @@ void loop() {
                 digitalWrite(ENABLE_MOTORS, LOW);
                 digitalWrite(ENABLE_MOTORS_2, LOW);
 
-                // Move in very short increments per frame for fast stop on release
-                moveplat(0.05f, zero_length, T_cur, T_target, R_cur, q_target);
+                // Move in short increments per frame; keep PWM continuous across frames
+                moveplat(0.10f, zero_length, T_cur, T_target, R_cur, q_target);
                 for (int i = 0; i < 3; ++i) T_cur[i] = T_target[i];
-                R_cur = q_target;
+                // Keep orientation locked to identity in D-pad mode
+                R_cur = Quaternion(1, 0, 0, 0);
             }
         } else if (c == 'S') {
             // Controller-only: ignore stop commands
@@ -434,38 +438,19 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
             // Pure feedforward velocity based on IK only (ignore pot feedback until calibrated)
             float vel = (length_next - length_t) * steps / duration;
 
-            // deadband to stop chatter (inches/sec)
-            const float V_DEADBAND = 0.03f;
-
-            // cap
+            // Simple clamp and deadband mapping to PWM, no hysteresis/filtering
             const float V_MAX = 0.20f;
             if (vel >  V_MAX) vel =  V_MAX;
             if (vel < -V_MAX) vel = -V_MAX;
 
-            // if very small velocity, stop motor (don’t flip direction)
+            const float V_DEADBAND = 0.03f;
             if (fabsf(vel) < V_DEADBAND) {
-                pwm[motor] = 0;               // command stop
-                // keep last_dir[motor] as-is
+                pwm[motor] = 0;
+                // do not change last_dir when stopped
             } else {
-                int8_t d = (vel > 0) ? +1 : -1;
-
-                // direction hysteresis: only allow flip if clearly moving
-                if (last_dir[motor] == 0) last_dir[motor] = d;
-                if (d != last_dir[motor] && fabsf(vel) < 0.06f) {
-                    // not strong enough to justify flipping -> stop instead
-                    pwm[motor] = 0;
-                } else {
-                    last_dir[motor] = d;
-
-                    // map magnitude to PWM
-                    float vmag = fabsf(vel);
-                    int pwm_speed = (int)mapFloat(vmag, V_DEADBAND, V_MAX, 0, 255);
-
-                    // minimum PWM to actually move
-                    if (pwm_speed < 35) pwm_speed = 35;
-
-                    pwm[motor] = pwm_speed;
-                }
+                int pwm_speed = (int)mapFloat(fabsf(vel), V_DEADBAND, V_MAX, 40, 255);
+                pwm[motor] = constrain(pwm_speed, 0, 255);
+                last_dir[motor] = (vel > 0) ? +1 : -1; // update direction only when moving
             }
 
               
@@ -490,13 +475,16 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
         
         Serial.print('\n');
        
-        // Sets the pwm values of the pins and thus the speed/direction of the motors
+        // Sets the pwm values and direction deterministically per motor
         for (motor = 0; motor < NUM_MOTORS; ++motor) {
-            int dir_level = (last_dir[motor] >= 0) ? EXTEND : RETRACT;
-            digitalWrite(DIR_PINS[motor], dir_level);
-            analogWrite(PWM_PINS[motor], pwm[motor]); // pwm[motor] is magnitude (non-negative)
-    //            Serial.print(pwm[motor]);
-    //            if (motor < 5) Serial.print(", ");
+            if (pwm[motor] == 0) {
+                analogWrite(PWM_PINS[motor], 0);
+            } else {
+                digitalWrite(DIR_PINS[motor], (last_dir[motor] > 0) ? EXTEND : RETRACT);
+                analogWrite(PWM_PINS[motor], pwm[motor]);
+            }
+//            Serial.print(pwm[motor]);
+//            if (motor < 5) Serial.print(", ");
         }
         //Serial.println("]");
                 unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
@@ -507,11 +495,6 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
                 }
                 //Serial.println(cur_time - start_time);
             }
-
-    // Ensure motors stop at end of move
-    for (motor = 0; motor < NUM_MOTORS; ++motor) {
-            analogWrite(PWM_PINS[motor], 0);
-    }
 
     Serial.print('\n');
 //  Serial.print("Error Accumulated: ");
