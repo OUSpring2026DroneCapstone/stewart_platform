@@ -149,48 +149,23 @@ void loop() {
             Serial.print(" yaw="); Serial.print(yaw, 1);
             Serial.print("\r\n");
 
-            // Deadzones and gating: require bumper/trigger (Z control) held to allow any motion
-            const float dead_ax = 0.05f;    // normalized units
-            const float dead_ang = 0.5f;    // degrees
-            bool axes_active = (fabsf(ax) > dead_ax || fabsf(ay) > dead_ax || fabsf(alt) > dead_ang || fabsf(yaw) > dead_ang);
-            // Hold-to-move: either Z input non-zero or enable flag via 'azi' (from sender)
-            bool hold_active = (fabsf(az) > dead_ax || fabsf(azi) > dead_ang);
+            // Treat ax/ay/az as the only truth (simple D-pad + RB/LB mapping)
+            const float dead = 0.05f;
+            bool active = (fabsf(ax) > dead || fabsf(ay) > dead || fabsf(az) > dead);
 
-            if (!hold_active) {
-                // Require button hold to move; when not held, hold position (PWM=0)
+            if (!active) {
+                // Idle: no motion, hold drivers enabled with PWM=0
                 valid = false;
-                for (motor = 0; motor < NUM_MOTORS; ++motor) {
-                    analogWrite(PWM_PINS[motor], 0);
-                }
-                digitalWrite(ENABLE_MOTORS, LOW);
-                digitalWrite(ENABLE_MOTORS_2, LOW);
-            } else if (!axes_active) {
-                // Button held but no directional input: no movement
-                valid = false;
-                for (motor = 0; motor < NUM_MOTORS; ++motor) {
-                    analogWrite(PWM_PINS[motor], 0);
-                }
+                for (motor = 0; motor < NUM_MOTORS; ++motor) analogWrite(PWM_PINS[motor], 0);
                 digitalWrite(ENABLE_MOTORS, LOW);
                 digitalWrite(ENABLE_MOTORS_2, LOW);
             } else {
+                // Quantize to -1, 0, +1 for clean single-axis steps
+                ax = (ax > dead) ? 1.0f : (ax < -dead ? -1.0f : 0.0f);
+                ay = (ay > dead) ? 1.0f : (ay < -dead ? -1.0f : 0.0f);
+                az = (az > dead) ? 1.0f : (az < -dead ? -1.0f : 0.0f);
                 // Map axes to inches and degrees
-                // If D-pad flag present, lock to axis based on encoded 'azi' value (2.1=X, 2.2=Y, 2.3=Z)
-                if (azi > 1.5f) {
-                    if (azi < 2.5f) { // X
-                        ax = (ax > 0) ? 1.0f : (ax < 0 ? -1.0f : 0.0f);
-                        ay = 0.0f; az = 0.0f;
-                    } else if (azi < 3.0f) { // Y
-                        ay = (ay > 0) ? 1.0f : (ay < 0 ? -1.0f : 0.0f);
-                        ax = 0.0f; az = 0.0f;
-                    } else { // Z
-                        az = (az > 0) ? 1.0f : (az < 0 ? -1.0f : 0.0f);
-                        ax = 0.0f; ay = 0.0f;
-                    }
-                }
-
-                float tx = ax * 3.0f; // +/-3"
-                float ty = ay * 3.0f;
-                float tz = az * 3.0f;
+                // No D-pad flag logic; use ax/ay/az directly
 
                 // Build orientation: ignore 'azi' for tilt to avoid unintended rotation
                 Quaternion tilt = azi_alt_to_rot(0.0f, alt);
@@ -198,7 +173,18 @@ void loop() {
                 Quaternion q_yaw(cos(yaw_rad_half), 0, 0, sin(yaw_rad_half));
                 Quaternion q_target = tilt * q_yaw;
 
-                float T_target[3] = {tx, ty, tz};
+                // Incremental stepping: add a small step to current target each frame
+                const float STEP = 0.05f;   // 0.05 in per frame (~1.5 in/s @ 30Hz)
+                float T_target[3] = {
+                    T_cur[0] + ax * STEP,
+                    T_cur[1] + ay * STEP,
+                    T_cur[2] + az * STEP
+                };
+
+                // Safety clamps: limit workspace
+                T_target[0] = constrain(T_target[0], -1.0f, 1.0f);
+                T_target[1] = constrain(T_target[1], -1.0f, 1.0f);
+                T_target[2] = constrain(T_target[2], -1.0f, 1.0f);
 
                 // Allow movement only when button is held and inputs are active
                 valid = true;
@@ -382,13 +368,14 @@ void lerp(const float pos0[3], const float pos1[3], float t, float T[3]) {
 //moves the platform
 inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1){
 
-    int steps = duration * 30; // smoothing (~30 Hz)
+    int steps = (int)(duration * 30); // smoothing (~30 Hz)
+    if (steps < 1) steps = 1;
     float Kp = 0.0f; // remove proportional correction to eliminate jitter near target
     
     //keeps track of average error for iteration of Kp for PID
     float avg_error[NUM_MOTORS] = { 0, 0, 0, 0, 0, 0 };
 
-    for (int step = 0; step <= steps; step++) {
+    for (int step = 0; step < steps; ++step) {
         unsigned long start_time = millis();
         float t = float(step) / steps;
         // No watchdog here; loop drives short steps per frame
@@ -443,23 +430,8 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
             length_t = sqrt(length_t);
             length_next = sqrt(length_next);
             
-            //figure out the error between the ideal length (based off the inverse kinematics) vs. the actual length (based off potentiometer readings)th
-            //"ideal length" is length_t, and actual is length_now
-            float reading = getAverageReading(motor);
-            float length_now = mapFloat(reading, ZERO_POS[motor], END_POS[motor], 0, 8) + length_min;
-            float error = length_t - length_now;
-            avg_error[motor] += fabsf(error) / steps;
-
-            //figures out the velocity using a mix of feedforward (length_next - length_t)
-            //and feedback/proportional control (error * Kp)
-            //the feedforward terms gives a starting point for the velocity based off the inverse kinematics
-            //the feedback term is used to speed up or slow down the actuator depending on if it is lagging behind or going too fast
-            //TO DO: play around with the proportional coefficient (Kp) to see how it changes the response
-            //based off experience, a higher Kp will result in jerkier motion, but less average error
-            //Also TO DO: play around with step size (steps / duration) to see how things changes
-            //smaller step sizes also seem to result in jerkier motion
-            // Larger error deadband to prevent PWM chatter
-            float vel = (fabsf(error) < 0.10f) ? 0.0f : (length_next - length_t + error * Kp) * steps / duration;
+            // Pure feedforward velocity based on IK only (ignore pot feedback until calibrated)
+            float vel = (length_next - length_t) * steps / duration;
 
               
               //safety measure to stop the platform in case the actuators drift too far
@@ -512,10 +484,15 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
                 while (millis() < end_time) {
                     // busy wait
                 }
-        //Serial.println(cur_time - start_time);
-      }
+                //Serial.println(cur_time - start_time);
+            }
 
-  Serial.print('\n');
+    // Ensure motors stop at end of move
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+            analogWrite(PWM_PINS[motor], 0);
+    }
+
+    Serial.print('\n');
 //  Serial.print("Error Accumulated: ");
 //  for (motor = 0; motor < NUM_MOTORS; ++motor)
 //  {

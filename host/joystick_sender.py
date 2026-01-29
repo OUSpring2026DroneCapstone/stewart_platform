@@ -61,7 +61,6 @@ def main():
     last_rx = ''
     command_pause_until = 0.0
     dpad_mode = True
-    locked_axis = None  # 'X', 'Y', or 'Z' while LB/RB held
     ax_f = ay_f = az_f = alt_f = yaw_f = 0.0
 
     # No auto-enable self-test; controller-only movement
@@ -94,39 +93,25 @@ def main():
 
             # Input mapping
             if dpad_mode:
-                hx, hy = js.get_hat(0)
+                hx, hy = js.get_hat(0)         # dpad: hx=-1/0/1, hy=-1/0/1
                 lb = 1.0 if js.get_button(4) else 0.0
                 rb = 1.0 if js.get_button(5) else 0.0
-                holding = (rb > 0.0 or lb > 0.0)
-                dpad_pressed = (hx != 0 or hy != 0)
 
-                # Update locked axis while holding; persist until release
-                if holding:
-                    if dpad_pressed:
-                        locked_axis = 'X' if abs(hx) >= abs(hy) else 'Y'
-                    else:
-                        locked_axis = 'Z'
-                else:
-                    locked_axis = None
+                # D-pad controls X/Y only (one axis at a time)
+                ax_raw = float(hx)             # right=+1, left=-1
+                ay_raw = float(hy)             # up=+1, down=-1
 
-                # Quantize inputs based on locked axis
-                if locked_axis == 'X':
-                    ax_raw, ay_raw, az_raw = float(hx), 0.0, 0.0
-                    azi = 2.1  # flag X
-                elif locked_axis == 'Y':
-                    ax_raw, ay_raw, az_raw = 0.0, float(-hy), 0.0
-                    azi = 2.2  # flag Y
-                elif locked_axis == 'Z':
-                    ax_raw, ay_raw, az_raw = 0.0, 0.0, (rb - lb)
-                    azi = 2.3  # flag Z
-                else:
-                    # Not holding: no motion
-                    ax_raw = ay_raw = az_raw = 0.0
-                    azi = 0.0
-                alt = 0.0; yaw = 0.0
+                # RB/LB controls Z only
+                az_raw = (rb - lb)             # RB=+1 (up), LB=-1 (down)
 
-                # Active only when holding and a direction or Z is engaged
-                dpad_active = bool(holding and (dpad_pressed or abs(rb - lb) > 0.0))
+                # NO tilt/yaw in dpad mode
+                alt = 0.0
+                yaw = 0.0
+
+                # enable flag (just "1" when anything is pressed)
+                azi = 1.0 if (hx != 0 or hy != 0 or abs(az_raw) > 0.0) else 0.0
+
+                dpad_active = (azi > 0.5)
             else:
                 ax_raw = clamp(js.get_axis(0)) * TRANS_SCALE
                 ay_raw = clamp(-js.get_axis(1)) * TRANS_SCALE
