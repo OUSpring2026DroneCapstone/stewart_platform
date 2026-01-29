@@ -7,6 +7,7 @@
 // Actuator variables
 uint8_t pwm[NUM_MOTORS];            // current PWM for each actuator
 MotorDirection dir[NUM_MOTORS];     // current direction for each actuator (EXTEND or RETRACT)
+static int8_t last_dir[NUM_MOTORS] = {0}; // -1 retract, +1 extend, 0 unknown
 
 // Position variables
 int16_t pos[NUM_MOTORS];            // current position (measured by analog read) of each actuator
@@ -174,7 +175,7 @@ void loop() {
                 Quaternion q_target = tilt * q_yaw;
 
                 // Incremental stepping: add a small step to current target each frame
-                const float STEP = 0.05f;   // 0.05 in per frame (~1.5 in/s @ 30Hz)
+                const float STEP = 0.02f;   // 0.02 in per frame (~0.6 in/s @ 30Hz)
                 float T_target[3] = {
                     T_cur[0] + ax * STEP,
                     T_cur[1] + ay * STEP,
@@ -433,6 +434,40 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
             // Pure feedforward velocity based on IK only (ignore pot feedback until calibrated)
             float vel = (length_next - length_t) * steps / duration;
 
+            // deadband to stop chatter (inches/sec)
+            const float V_DEADBAND = 0.03f;
+
+            // cap
+            const float V_MAX = 0.20f;
+            if (vel >  V_MAX) vel =  V_MAX;
+            if (vel < -V_MAX) vel = -V_MAX;
+
+            // if very small velocity, stop motor (don’t flip direction)
+            if (fabsf(vel) < V_DEADBAND) {
+                pwm[motor] = 0;               // command stop
+                // keep last_dir[motor] as-is
+            } else {
+                int8_t d = (vel > 0) ? +1 : -1;
+
+                // direction hysteresis: only allow flip if clearly moving
+                if (last_dir[motor] == 0) last_dir[motor] = d;
+                if (d != last_dir[motor] && fabsf(vel) < 0.06f) {
+                    // not strong enough to justify flipping -> stop instead
+                    pwm[motor] = 0;
+                } else {
+                    last_dir[motor] = d;
+
+                    // map magnitude to PWM
+                    float vmag = fabsf(vel);
+                    int pwm_speed = (int)mapFloat(vmag, V_DEADBAND, V_MAX, 0, 255);
+
+                    // minimum PWM to actually move
+                    if (pwm_speed < 35) pwm_speed = 35;
+
+                    pwm[motor] = pwm_speed;
+                }
+            }
+
               
               //safety measure to stop the platform in case the actuators drift too far
 //            if (abs(error) > .5){
@@ -442,22 +477,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 //              Serial.println(length_now);
 //              //valid = false;
 //            }
-            
-                        //cap speed to ~0.8"/s for much slower motion
-                        if (fabsf(vel) > 0.3f){
-                            vel = 0.3f * ((vel > 0)? 1:-1);
-                        }
 
-            //maps speed to a pwm value
-            int pwm_speed = mapFloat(vel, 0, 0.3f, 0, 255);
-            
-            //sets lower cap for speed
-            //motor will not move below this pwm
-                        if (abs(pwm_speed) < 20){
-                            pwm_speed = 0;
-                        }
-  
-            pwm[motor] = pwm_speed;
         }
   
                 if (!valid){
@@ -470,12 +490,13 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
         
         Serial.print('\n');
        
-        // Sets the pwm values of the pins and this the speed of the motors
+        // Sets the pwm values of the pins and thus the speed/direction of the motors
         for (motor = 0; motor < NUM_MOTORS; ++motor) {
-            digitalWrite(DIR_PINS[motor], (pwm[motor]>0) ? EXTEND:RETRACT);
-            analogWrite(PWM_PINS[motor], abs(pwm[motor]));
-//            Serial.print(pwm[motor]);
-//            if (motor < 5) Serial.print(", ");
+            int dir_level = (last_dir[motor] >= 0) ? EXTEND : RETRACT;
+            digitalWrite(DIR_PINS[motor], dir_level);
+            analogWrite(PWM_PINS[motor], pwm[motor]); // pwm[motor] is magnitude (non-negative)
+    //            Serial.print(pwm[motor]);
+    //            if (motor < 5) Serial.print(", ");
         }
         //Serial.println("]");
                 unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
