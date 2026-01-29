@@ -193,7 +193,6 @@ void checkSerialCommands() {
 
                 Serial.println("Centering requested");
 
-                // enable motors if needed
                 if (!motors_enabled) {
                     for (uint8_t m = 0; m < NUM_MOTORS; m++) {
                         analogWrite(PWM_PINS[m], 0);
@@ -202,16 +201,28 @@ void checkSerialCommands() {
                     motors_enabled = true;
                 }
 
+                
+
                 moveplat(3.0, zero_length, T0, T0, R0, R0);
                 centered = true;
 
-                Serial.println("Centered");
+                for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+                    analogWrite(PWM_PINS[m], 0);
+                }
+                digitalWrite(ENABLE_MOTORS, HIGH);  // disable motors
+            
+                motors_enabled = false;
+
+                Serial.println("Centered and motors disabled");
+
             }
 
             else if (buffer == "start") {
                 if (!centered) {
-                    Serial.println("Refusing to start: platform not centered");
+                    Serial.println("Refusing to start, platform not centered");
                 } else {
+                    digitalWrite(ENABLE_MOTORS, LOW);
+                    motors_enabled = true;
                     start_requested = true;
                     Serial.println("Starting motion");
                 }
@@ -399,6 +410,17 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     float avg_error[NUM_MOTORS] = { 0, 0, 0, 0, 0, 0 };
 
     for (int step = 0; step <= steps; step++) {
+
+        checkSerialCommands();
+        if (stop_requested) {
+            for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+                analogWrite(PWM_PINS[m], 0);
+            }
+            digitalWrite(ENABLE_MOTORS, HIGH);
+            stop_requested = false;   // important
+            return;
+        }
+    
         long start_time = millis();
         float t = float(step) / steps;
         float t_next = float(step+1) / steps;
