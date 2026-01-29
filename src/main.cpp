@@ -45,6 +45,12 @@ bool valid = true;
 float zero_length = 0;
 float dur;
 
+// Automatic centering 
+bool motors_enabled = false;
+bool centered = false;
+bool start_requested = false;
+bool stop_requested = false;
+
 // Added these
 void calibrate();
 void moveplat(float dur,
@@ -116,48 +122,128 @@ void setup()
     dur = 2;
 
     
-    Serial.println("Up 2");
-    moveplat(dur, zero_length, T0, T1, R0, R0);
+    //Serial.println("Up 2");
+    //moveplat(dur, zero_length, T0, T1, R0, R0);
 
     //when chaining motions like this, make sure that the initial translation and rotation for the current motion...
     //correspond to the final translation and rotation of the last motion
     //i.e. if you ended on T1 and R0 on the last move, start with T1 and R0 on the next
-    Serial.println("Left");
-    moveplat(dur, zero_length, T1, TX, R0, R0);
-    Serial.println("Right");
-    moveplat(dur, zero_length, TX, T1, R0, R0);
 
-    Serial.println("Back");
-    moveplat(dur, zero_length, T1, TY, R0, R0);
-    Serial.println("Forth");
-    moveplat(dur, zero_length, TY, T1, R0, R0);
+    //Serial.println("Left");
+    //moveplat(dur, zero_length, T1, TX, R0, R0);
+    //Serial.println("Right");
+    //moveplat(dur, zero_length, TX, T1, R0, R0);
+
+    //Serial.println("Back");
+    //moveplat(dur, zero_length, T1, TY, R0, R0);
+    //Serial.println("Forth");
+    //moveplat(dur, zero_length, TY, T1, R0, R0);
     
-    Serial.println("Up");
-    moveplat(5, zero_length, T1, TZ, R0, R0);
+    //Serial.println("Up");
+    //moveplat(5, zero_length, T1, TZ, R0, R0);
     //moveplat(5, zero_length, TZ, T1, R0, R0);
 
-    Serial.println("Roll Left");
-    moveplat(dur, zero_length, TZ, TZ, R0, R1);
-    Serial.println("Roll Right");
-    moveplat(dur, zero_length, TZ, TZ, R1, R0);
+    //Serial.println("Roll Left");
+    //moveplat(dur, zero_length, TZ, TZ, R0, R1);
+    //Serial.println("Roll Right");
+    //moveplat(dur, zero_length, TZ, TZ, R1, R0);
 
-    Serial.println("Pitch Down");
-    moveplat(dur, zero_length, TZ, TZ, R0, R2);
-    Serial.println("Pitch Up");
-    moveplat(dur, zero_length, TZ, TZ, R2, R0);
+    //Serial.println("Pitch Down");
+    //moveplat(dur, zero_length, TZ, TZ, R0, R2);
+    //Serial.println("Pitch Up");
+    //moveplat(dur, zero_length, TZ, TZ, R2, R0);
 
-    Serial.println("Yaw Left");
-    moveplat(dur, zero_length, TZ, TZ, R0, R3);
-    Serial.println("Yaw Right");
-    moveplat(dur, zero_length, TZ, TZ, R3, R0);
+    //Serial.println("Yaw Left");
+    //moveplat(dur, zero_length, TZ, TZ, R0, R3);
+    //Serial.println("Yaw Right");
+    //moveplat(dur, zero_length, TZ, TZ, R3, R0);
       
     //Disables motors
     //Note that HIGH corresponds to disable
     digitalWrite(ENABLE_MOTORS, HIGH);
 }
 
+void checkSerialCommands() {
+    static String buffer = "";
+
+    while (Serial.available()) {
+        char c = Serial.read();
+
+        if (c == '\n' || c == '\r') {
+            buffer.trim();
+            buffer.toLowerCase();
+
+            if (buffer == "stop") {
+                stop_requested = true;
+                start_requested = false;
+
+                for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+                    analogWrite(PWM_PINS[m], 0);
+                }
+
+                digitalWrite(ENABLE_MOTORS, HIGH);
+                motors_enabled = false;
+                centered = false;
+
+                Serial.println("STOPPED");
+            }
+
+            else if (buffer == "center") {
+                stop_requested = false;
+
+                Serial.println("Centering requested");
+
+                // enable motors if needed
+                if (!motors_enabled) {
+                    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+                        analogWrite(PWM_PINS[m], 0);
+                    }
+                    digitalWrite(ENABLE_MOTORS, LOW);
+                    motors_enabled = true;
+                }
+
+                moveplat(3.0, zero_length, T0, T0, R0, R0);
+                centered = true;
+
+                Serial.println("Centered");
+            }
+
+            else if (buffer == "start") {
+                if (!centered) {
+                    Serial.println("Refusing to start: platform not centered");
+                } else {
+                    start_requested = true;
+                    Serial.println("Starting motion");
+                }
+            }
+
+            buffer = "";
+        }
+        else {
+            buffer += c;
+        }
+    }
+}
+
+
 void loop() {
   //Do nothing
+  checkSerialCommands();
+
+  if (start_requested) {
+      start_requested = false;
+
+      Serial.println("Running motion sequence");
+
+      moveplat(dur, zero_length, T0, T1, R0, R0);
+      moveplat(dur, zero_length, T1, TX, R0, R0);
+      moveplat(dur, zero_length, TX, T1, R0, R0);
+      moveplat(dur, zero_length, T1, TY, R0, R0);
+      moveplat(dur, zero_length, TY, T1, R0, R0);
+      moveplat(5, zero_length, T1, TZ, R0, R0);
+
+      Serial.println("Motion complete");
+  }
   delay(500);
 }
 
