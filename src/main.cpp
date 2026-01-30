@@ -39,6 +39,16 @@ float dur = 2.0f;
 bool stop_requested = false;
 bool centered = false;
 
+
+// Discrete positions for D-pad control
+float T_CENTER[3] = {0, 0, 2};     // Home position
+float T_FORWARD[3] = {0, 3.0, 2};   // D-pad UP
+float T_BACK[3]    = {0, -3.0, 2};  // D-pad DOWN
+float T_RIGHT[3]   = {3.0, 0, 2};   // D-pad RIGHT
+float T_LEFT[3]    = {-3.0, 0, 2};  // D-pad LEFT
+
+
+
 // ------------------------- Mode control -------------------------
 enum ControlMode : uint8_t {
   MODE_IDLE = 0,
@@ -49,7 +59,7 @@ enum ControlMode : uint8_t {
 static ControlMode mode = MODE_IDLE;
 
 // Controller state (current target pose)
-static float T_cur[3] = {0, 0, 0};
+static float T_cur[3] = {0, 0, 2};
 static Quaternion R_cur = Quaternion(1, 0, 0, 0);
 
 // ------------------------- Forward declarations -------------------------
@@ -180,8 +190,8 @@ void checkTextCommands() {
         // Go to home pose
         moveplat(3.0f, zero_length, T0, T0, R0, R0);
 
-        // Update controller pose trackers (so controller starts from centered)
-        T_cur[0] = 0; T_cur[1] = 0; T_cur[2] = 0;
+        // Update controller pose trackers (start from common working height)
+        T_cur[0] = 0; T_cur[1] = 0; T_cur[2] = 2.0f;
         R_cur = Quaternion(1, 0, 0, 0);
 
         // Disable after centering
@@ -233,60 +243,75 @@ void handleJoystickFrames() {
   float ax  = Serial.parseFloat();
   float ay  = Serial.parseFloat();
   float az  = Serial.parseFloat();
-  float azi = Serial.parseFloat();  // used as enable flag in your Python
-  float alt = Serial.parseFloat();  // degrees
-  float yaw = Serial.parseFloat();  // degrees
+  float azi = Serial.parseFloat();   // enable flag
+  float alt = Serial.parseFloat();
+  float yaw = Serial.parseFloat();
 
-  // “Enable flag” behavior: if azi is not active, stop PWM and do nothing
+  // Require enable flag
   if (azi < 0.5f) {
+    Serial.println("No input - motors off");
     for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
     return;
   }
 
-  // Deadband like your Python
+  // Deadband
   const float dead_t = 0.05f;
-  const float dead_a = 0.5f;
 
-  bool active =
-      (fabsf(ax)  > dead_t) ||
-      (fabsf(ay)  > dead_t) ||
-      (fabsf(az)  > dead_t) ||
-      (fabsf(alt) > dead_a) ||
-      (fabsf(yaw) > dead_a);
+  // Quantize to -1/0/+1
+  ax = (ax > dead_t) ? 1.0f : (ax < -dead_t ? -1.0f : 0.0f);
+  ay = (ay > dead_t) ? 1.0f : (ay < -dead_t ? -1.0f : 0.0f);
 
-  if (!active) {
+  // Determine which position to go to
+  float* target_pos = nullptr;
+  String direction = "";
+
+  if (ax > 0.5f) {
+    target_pos = T_RIGHT;
+    direction = "RIGHT";
+  }
+  else if (ax < -0.5f) {
+    target_pos = T_LEFT;
+    direction = "LEFT";
+  }
+  else if (ay > 0.5f) {
+    target_pos = T_FORWARD;
+    direction = "FORWARD";
+  }
+  else if (ay < -0.5f) {
+    target_pos = T_BACK;
+    direction = "BACK";
+  }
+  else {
+    // No clear direction - stop motors
     for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
     return;
   }
 
-  // Translation step per received frame
-  const float STEP_IN = 0.02f; // match your earlier feel (~0.6 in/s @ 30Hz)
-  float T_target[3] = {
-    T_cur[0] + ax * STEP_IN,
-    T_cur[1] + ay * STEP_IN,
-    T_cur[2] + az * STEP_IN
-  };
+  // Debug output
+  Serial.print("Moving to: "); Serial.print(direction);
+  Serial.print(" ("); Serial.print(target_pos[0]);
+  Serial.print(", "); Serial.print(target_pos[1]);
+  Serial.print(", "); Serial.print(target_pos[2]);
+  Serial.println(")");
 
-  // Workspace clamps (tune these)
-  T_target[0] = constrain(T_target[0], -1.0f, 1.0f);
-  T_target[1] = constrain(T_target[1], -1.0f, 1.0f);
-  T_target[2] = constrain(T_target[2], -1.0f, 1.0f);
+  // Lock rotation flat
+  Quaternion q_flat = Quaternion(1, 0, 0, 0);
 
-  // Rotation target from alt/yaw
-  // - alt: tilt magnitude (degrees) about a joystick-provided axis in your Python (ry)
-  //   Your Python uses alt as pitch-ish. Here we interpret alt as "altitude" tilt toward heading 0.
-  // - yaw: yaw about Z (degrees)
-  Quaternion q_tilt = azi_alt_to_rot(0.0f, alt);
-  Quaternion q_yaw  = Quaternion(cos((yaw * DEG_TO_RAD) / 2.0f), 0, 0, sin((yaw * DEG_TO_RAD) / 2.0f));
-  Quaternion q_target = q_yaw * q_tilt;
+  // Move to the target position (takes ~1 second)
+  moveplat(1.0f, zero_length, T_cur, target_pos, q_flat, q_flat);
 
-  // Short move each frame
-  moveplat(0.10f, zero_length, T_cur, T_target, R_cur, q_target);
+  // Update current position tracker
+  T_cur[0] = target_pos[0];
+  T_cur[1] = target_pos[1];
+  T_cur[2] = target_pos[2];
+  R_cur = q_flat;
 
-  // Update trackers
-  for (int i = 0; i < 3; ++i) T_cur[i] = T_target[i];
-  R_cur = q_target;
+  // Stop motors after reaching position
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
+  
+  Serial.println("Position reached - motors stopped");
 }
+
 
 // ------------------------- Core motion math (from your first sketch) -------------------------
 inline int getAverageReading(uint8_t motor)
@@ -413,16 +438,23 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
       float vel = (length_next - length_t + error * Kp) * steps / duration;
 
-      if (fabsf(vel) > 2.0f) vel = 2.0f * ((vel > 0) ? 1.0f : -1.0f);
+      // Clamp velocity range
+      if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
 
-      int pwm_speed = (int)mapFloat(vel, 0, 2, 0, 255);
-      if (abs(pwm_speed) < 25) pwm_speed = 0;
-      pwm_local[motor] = pwm_speed;
+      // Map magnitude to PWM, keep sign for direction
+      int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
+      if (pwm_speed < 10) pwm_speed = 0; // lowered deadzone for debugging
+      pwm_local[motor] = (vel >= 0.0f) ? pwm_speed : -pwm_speed;
     }
 
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
-      digitalWrite(DIR_PINS[motor], (pwm_local[motor] > 0) ? EXTEND : RETRACT);
-      analogWrite(PWM_PINS[motor], abs((int)pwm_local[motor]));
+        int p = (int)pwm_local[motor];
+        if (p == 0) {
+            analogWrite(PWM_PINS[motor], 0);
+        } else {
+            digitalWrite(DIR_PINS[motor], (p > 0) ? EXTEND : RETRACT);
+            analogWrite(PWM_PINS[motor], abs(p));
+        }
     }
 
     unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);

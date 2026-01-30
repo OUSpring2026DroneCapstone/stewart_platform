@@ -230,7 +230,7 @@ def main():
                 active = dpad_active
             else:
                 active = (abs(ax_f) > dead_ax or abs(ay_f) > dead_ax or abs(az_f) > dead_ax or abs(alt_f) > dead_ang or abs(yaw_f) > dead_ang)
-
+            azi = 1.0 if active else 0.0
             if controller_armed and active and time.monotonic() >= command_pause_until:
                 line = f"J {ax_f:.3f} {ay_f:.3f} {az_f:.3f} {azi:.1f} {alt_f:.1f} {yaw_f:.1f}\n"
                 ser.write(line.encode('ascii'))
@@ -256,6 +256,7 @@ def main():
             blit_line(70,  f"A=controller  B=stop  X=center  Y=start")
             blit_line(100, f"Axes: ax={ax_f:.2f} ay={ay_f:.2f} az={az_f:.2f}  alt={alt_f:.1f} yaw={yaw_f:.1f}")
             blit_line(130, f"SwapXY:{SWAP_XY}  InvX:{INVERT_X} InvY:{INVERT_Y} InvZ:{INVERT_Z}  Smooth:{SMOOTH_ALPHA:.2f}")
+            blit_line(160, f"Controller Armed: {controller_armed}   (Press A / click CONTROLLER)")
             blit_line(200, f"Arduino: {last_rx}")
             # Clickable command buttons
             btn_center = (12, 240, 160, 44)
