@@ -61,14 +61,23 @@ def main():
         return 1
 
     def send_cmd(cmd: str):
-        """
-        Send a text command that your Arduino sketch understands:
-        'center', 'controller', 'start', 'stop'
-        """
-        msg = (cmd.strip().lower() + "\n").encode("ascii")
+        nonlocal controller_armed, command_pause_until
+        cmd = cmd.strip().lower()
+        msg = (cmd + "\n").encode("ascii")
         try:
             ser.write(msg)
             print(f">>> SENT: {cmd}")
+
+            # Pause joystick streaming briefly so Arduino can read the command
+            command_pause_until = time.monotonic() + 0.35
+
+            # Track when it's safe/meaningful to stream J frames
+            if cmd == "controller":
+                controller_armed = True
+            elif cmd in ("stop", "center", "start"):
+                # start runs scripted sequence (no J frames needed)
+                controller_armed = False
+
         except Exception as e:
             print(f"Failed to send {cmd}: {e}")
 
@@ -80,6 +89,8 @@ def main():
     last_rx = ''
     dpad_mode = True
     ax_f = ay_f = az_f = alt_f = yaw_f = 0.0
+    controller_armed = False
+    command_pause_until = 0.0
 
     # Cooldown so a held button doesn't spam commands
     last_cmd_time = {"controller": 0.0, "stop": 0.0, "center": 0.0, "start": 0.0}
@@ -87,13 +98,30 @@ def main():
 
     def can_send(name: str) -> bool:
         now = time.monotonic()
-        if now - last_cmd_time[name] >= CMD_COOLDOWN:
+        if now - last_cmd_time.get(name, 0.0) >= CMD_COOLDOWN:
             last_cmd_time[name] = now
             return True
         return False
 
+    def draw_button(rect, text, mouse_pos, mouse_down):
+        x, y, w, h = rect
+        hover = (x <= mouse_pos[0] <= x+w and y <= mouse_pos[1] <= y+h)
+        color = (70, 90, 120) if hover else (50, 65, 90)
+        if hover and mouse_down:
+            color = (35, 45, 60)
+        pygame.draw.rect(screen, color, rect, border_radius=10)
+        pygame.draw.rect(screen, (120, 130, 150), rect, width=2, border_radius=10)
+        label = font.render(text, True, (230, 230, 230))
+        screen.blit(label, (x + 12, y + (h - label.get_height()) // 2))
+        return hover
+
     try:
+        was_mouse_down = False
         while True:
+            mouse_pos = pygame.mouse.get_pos()
+            mouse_down = pygame.mouse.get_pressed(num_buttons=3)[0]
+            clicked = (mouse_down and not was_mouse_down)
+            was_mouse_down = mouse_down
             # ---- Events (keyboard + controller buttons) ----
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -203,7 +231,7 @@ def main():
             else:
                 active = (abs(ax_f) > dead_ax or abs(ay_f) > dead_ax or abs(az_f) > dead_ax or abs(alt_f) > dead_ang or abs(yaw_f) > dead_ang)
 
-            if active:
+            if controller_armed and active and time.monotonic() >= command_pause_until:
                 line = f"J {ax_f:.3f} {ay_f:.3f} {az_f:.3f} {azi:.1f} {alt_f:.1f} {yaw_f:.1f}\n"
                 ser.write(line.encode('ascii'))
 
@@ -229,6 +257,26 @@ def main():
             blit_line(100, f"Axes: ax={ax_f:.2f} ay={ay_f:.2f} az={az_f:.2f}  alt={alt_f:.1f} yaw={yaw_f:.1f}")
             blit_line(130, f"SwapXY:{SWAP_XY}  InvX:{INVERT_X} InvY:{INVERT_Y} InvZ:{INVERT_Z}  Smooth:{SMOOTH_ALPHA:.2f}")
             blit_line(200, f"Arduino: {last_rx}")
+            # Clickable command buttons
+            btn_center = (12, 240, 160, 44)
+            btn_controller = (182, 240, 160, 44)
+            btn_start = (352, 240, 160, 44)
+            btn_stop = (522, 240, 160, 44)
+
+            h_center = draw_button(btn_center, "CENTER", mouse_pos, mouse_down)
+            h_controller = draw_button(btn_controller, "CONTROLLER", mouse_pos, mouse_down)
+            h_start = draw_button(btn_start, "START", mouse_pos, mouse_down)
+            h_stop = draw_button(btn_stop, "STOP", mouse_pos, mouse_down)
+
+            if clicked:
+                if h_center and can_send("center"):
+                    send_cmd("center")
+                elif h_controller and can_send("controller"):
+                    send_cmd("controller")
+                elif h_start and can_send("start"):
+                    send_cmd("start")
+                elif h_stop and can_send("stop"):
+                    send_cmd("stop")
 
             pygame.display.flip()
             clock.tick(30)
