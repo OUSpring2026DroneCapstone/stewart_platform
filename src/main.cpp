@@ -68,20 +68,12 @@ void handleJoystickFrames();  // parses "J ax ay az azi alt yaw\n"
 
 // ------------------------- Helpers: motor enable/stop -------------------------
 void setMotorsEnabled(bool en) {
-  // Your wiring: HIGH = disable, LOW = enable
+  // HIGH = disable, LOW = enable
   digitalWrite(ENABLE_MOTORS, en ? LOW : HIGH);
 
   #ifdef ENABLE_MOTORS_2
   digitalWrite(ENABLE_MOTORS_2, en ? LOW : HIGH);
   #endif
-}
-
-void stopThisHoe() {
-  for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-  setMotorsEnabled(false);
-  mode = MODE_IDLE;
-  stop_requested = false;
-  Serial.println("STOPPED");
 }
 
 // ------------------------- Setup -------------------------
@@ -133,6 +125,7 @@ void setup() {
 
 // ------------------------- Loop -------------------------
 void loop() {
+
   // Always watch for text commands
   checkTextCommands();
 
@@ -151,7 +144,7 @@ void loop() {
     moveplat(5.0f, zero_length, T1, TZ, R0, R0);
 
     Serial.println("Script complete");
-    stopThisHoe();
+    //stopThisHoe();
   }
 
   delay(2);
@@ -176,7 +169,7 @@ void checkTextCommands() {
 
       if (buf == "stop") {
         stop_requested = true;
-        stopThisHoe();
+        //stopThisHoe();
       }
       else if (buf == "center") {
         Serial.println("Centering...");
@@ -366,8 +359,16 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
   for (int step = 0; step <= steps; step++) {
 
-    // stop support
-    if (stop_requested) return;
+    checkTextCommands();
+  
+    if (stop_requested) {
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        analogWrite(PWM_PINS[m], 0);
+      }
+      setMotorsEnabled(false);
+      stop_requested = false; 
+      return;
+    }
 
     unsigned long start_time = millis();
     float t      = float(step) / steps;
