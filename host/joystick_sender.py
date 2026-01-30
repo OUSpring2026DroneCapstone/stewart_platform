@@ -52,6 +52,12 @@ def main():
             pass
         ser.reset_input_buffer()
         ser.reset_output_buffer()
+
+        ser.write(b"center\n")
+        time.sleep(4.0)           # centering move time (adjust if needed)
+        ser.write(b"controller\n")
+        time.sleep(0.2)
+        
     except Exception as e:
         print(f'Failed to open serial {port}: {e}')
         return 1
@@ -198,7 +204,7 @@ def main():
 
             clock.tick(30)
     except KeyboardInterrupt:
-        print('\nStopping...'); ser.write(b'S')
+        print('\nStopping...'); ser.write(b"stop\n")
     finally:
         ser.close(); pygame.quit()
     return 0

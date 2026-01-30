@@ -1,42 +1,31 @@
 #include <Arduino.h>
 #include <math.h>
-#include  "pin_layout.h"
+#include "pin_layout.h"
 #include "Quaternion.h"
 #include "platform.h"
 
-// Actuator variables
-uint8_t pwm[NUM_MOTORS];            // current PWM for each actuator
-MotorDirection dir[NUM_MOTORS];     // current direction for each actuator (EXTEND or RETRACT)
-static int8_t last_dir[NUM_MOTORS] = {0}; // -1 retract, +1 extend, 0 unknown
+// ------------------------- Actuator variables -------------------------
+uint8_t pwm_cmd[NUM_MOTORS];
+MotorDirection dir_cmd[NUM_MOTORS];
 
-// Position variables
-int16_t pos[NUM_MOTORS];            // current position (measured by analog read) of each actuator
-int16_t input[NUM_MOTORS];          // intermediate input retrieved from the serial buffer
-uint16_t desired_pos[NUM_MOTORS];   // desired (user-inputted and validated) position of each actuator
+// ------------------------- Position variables -------------------------
+int16_t pos[NUM_MOTORS];
+int16_t input[NUM_MOTORS];
+uint16_t desired_pos[NUM_MOTORS];
 
-// Calibration variables
+// ------------------------- Calibration variables -------------------------
 int16_t end_readings[NUM_MOTORS];
 int16_t zero_readings[NUM_MOTORS];
-
 bool calibration_valid;
 
-// Time variables (for printing)
-unsigned long current_time;         // current time (in millis); used to measure difference from previous_time
-unsigned long previous_time;        // last recorded time (in millis); measured from execution start or last print
-// No watchdog timestamp; movement steps per frame
+// ------------------------- Iterator/sum variables -------------------------
+uint8_t motor;
+uint8_t reading;
+int32_t reading_sum;
 
-// Iterator/sum variables
-uint8_t motor;                      // used to iterate through actuators by their indexing (0 to NUM_MOTORS - 1)
-uint8_t reading;                    // used to iterate through analog reads (0 to NUM_READINGS - 1)
-int32_t reading_sum;                // sum of multiple readings to be averaged for a final value
+// ------------------------- Quaternions / transforms -------------------------
+Quaternion R0, R1, R2, R3;
 
-//Declare all quaternion rotations, with respect to (WRT) the home position
-Quaternion R0;
-Quaternion R1;
-Quaternion R2;
-Quaternion R3;
-
-//Declare the transformations WRT the top of the platform when all actuators are retracted
 float T0[3] = {0, 0, 0};
 float T1[3] = {0, 0, 2};
 float T2[3] = {1, -2, 3};
@@ -44,466 +33,398 @@ float TX[3] = {3, 0, 2};
 float TY[3] = {0, 3, 2};
 float TZ[3] = {0, 0, 5};
 
-bool valid = false; // start disabled; no motion unless controller frames received
-float zero_length = 0;
-float dur;
+float zero_length = 0.0f;
+float dur = 2.0f;
 
-// Added these
-void calibrate();
-void moveplat(float dur,
-    float zero_length,
-    float* T0,
-    float* T1,
-    Quaternion R0,
-    Quaternion R1);
-// Forward declare to allow use in loop() before definition
-void moveAll(MotorDirection dir);
+bool stop_requested = false;
+bool centered = false;
 
+// ------------------------- Mode control -------------------------
+enum ControlMode : uint8_t {
+  MODE_IDLE = 0,
+  MODE_SCRIPT,
+  MODE_CONTROLLER
+};
 
-void setup()
-{
-    // Initialize serial immediately to avoid hanging at startup
-    Serial.begin(BAUD_RATE);
-    Serial.setTimeout(30);
+static ControlMode mode = MODE_IDLE;
 
-    // Initialize pins
-    for (motor = 0; motor < NUM_MOTORS; ++motor)
-    {
-        pinMode(DIR_PINS[motor], OUTPUT);
-        digitalWrite(DIR_PINS[motor], LOW);
-
-        pinMode(PWM_PINS[motor], OUTPUT);
-        analogWrite(PWM_PINS[motor], 0);
-
-        pinMode(POT_PINS[motor], INPUT);
-    }
-
-    // Initialize actuator enable switches (disabled by default)
-    pinMode(ENABLE_MOTORS, OUTPUT);
-    pinMode(ENABLE_MOTORS_2, OUTPUT);
-    digitalWrite(ENABLE_MOTORS, HIGH);
-    digitalWrite(ENABLE_MOTORS_2, HIGH);
-
-    // For safety, ensure initial actuator speed variables are 0
-    for (motor = 0; motor < NUM_MOTORS; ++motor)
-    {
-        pwm[motor] = 0;
-    }
-
-    // Serial already initialized above
-
-    //find the length at 0" of extension
-    //uses pythragorean thm and vector math
-    for (int i = 0; i < 3; i++) {
-      float d = plat_0[i] + plat_1[i] - base_1[i];
-     
-      zero_length += d * d;
-    }
-    
-    zero_length = sqrt(zero_length);
-    // Do not auto-calibrate or move at startup; controller-only movement
-    calibration_valid = false;
-
-    //calibrate_vel();
-
-    //for azi_alt_to_rot, you declare an azimuthal angle (heading) and altitude angle (WRT to the horizon) of tilt, which gets converted into a quaternion rotation
-    //azi_alt_to_rot(0.0, 10.0) signifies a tilt of 10 degrees WRT toward a heading of 0 degrees
-    //more info in Quaternion library
-    R0 = azi_alt_to_rot(0.0, 0.0);
-    R1 = azi_alt_to_rot(0.0, 10.0);
-    R2 = azi_alt_to_rot(90.0, 10.0);
-    R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
-
-    dur = 2;
-
-    Serial.println("Ready. Controller control active.");
-}
-
-// Current pose for incremental control
+// Controller state (current target pose)
 static float T_cur[3] = {0, 0, 0};
 static Quaternion R_cur = Quaternion(1, 0, 0, 0);
-// Last commanded target to avoid re-triggering same motion repeatedly
-// Removed last-command gating
 
-void loop() {
-    // Fast polling for commands / joystick frames
-    if (Serial.available() > 0) {
-        char c = Serial.peek();
-        if (c == 'J') {
-            Serial.read(); // consume 'J'
-            // Expect 6 floats: ax ay az azi alt yaw followed by newline
-            float ax = Serial.parseFloat();
-            float ay = Serial.parseFloat();
-            float az = Serial.parseFloat();
-            float azi = Serial.parseFloat();
-            float alt = Serial.parseFloat();
-            float yaw = Serial.parseFloat();
+// ------------------------- Forward declarations -------------------------
+inline int getAverageReading(uint8_t motor);
+inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
+inline void moveAll(MotorDirection dir);
+inline void calibrate();
+void lerp(const float pos0[3], const float pos1[3], float t, float T[3]);
+inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1);
 
-            // process per frame
+void setMotorsEnabled(bool en);
+void stopThisHoe();
 
-            // Echo received values for debugging
-            Serial.print("<RX J> ax="); Serial.print(ax, 3);
-            Serial.print(" ay="); Serial.print(ay, 3);
-            Serial.print(" az="); Serial.print(az, 3);
-            Serial.print(" azi="); Serial.print(azi, 1);
-            Serial.print(" alt="); Serial.print(alt, 1);
-            Serial.print(" yaw="); Serial.print(yaw, 1);
-            Serial.print("\r\n");
+void checkTextCommands();     // parses "center/start/controller/stop"
+void handleJoystickFrames();  // parses "J ax ay az azi alt yaw\n"
 
-            // Treat ax/ay/az as the only truth (simple D-pad + RB/LB mapping)
-            const float dead = 0.05f;
-            bool active = (fabsf(ax) > dead || fabsf(ay) > dead || fabsf(az) > dead);
+// ------------------------- Helpers: motor enable/stop -------------------------
+void setMotorsEnabled(bool en) {
+  // Your wiring: HIGH = disable, LOW = enable
+  digitalWrite(ENABLE_MOTORS, en ? LOW : HIGH);
 
-            if (!active) {
-                // Idle: no motion, hold drivers enabled with PWM=0
-                valid = false;
-                for (motor = 0; motor < NUM_MOTORS; ++motor) analogWrite(PWM_PINS[motor], 0);
-                digitalWrite(ENABLE_MOTORS, LOW);
-                digitalWrite(ENABLE_MOTORS_2, LOW);
-            } else {
-                // Quantize to -1, 0, +1 for clean single-axis steps
-                ax = (ax > dead) ? 1.0f : (ax < -dead ? -1.0f : 0.0f);
-                ay = (ay > dead) ? 1.0f : (ay < -dead ? -1.0f : 0.0f);
-                az = (az > dead) ? 1.0f : (az < -dead ? -1.0f : 0.0f);
-                // Force single-axis only: if both pressed, prefer horizontal (X)
-                if (ax != 0.0f && ay != 0.0f) {
-                    ay = 0.0f;
-                }
-                // Map axes to inches and degrees
-                // No D-pad flag logic; use ax/ay/az directly
-                
-                // D-pad mode: ignore any rotation entirely (always keep flat)
-                alt = 0.0f;
-                yaw = 0.0f;
-                Quaternion q_target = Quaternion(1, 0, 0, 0); // identity rotation
-
-                // Incremental stepping: add a small step to current target each frame
-                const float STEP = 0.02f;   // 0.02 in per frame (~0.6 in/s @ 30Hz)
-                float T_target[3] = {
-                    T_cur[0] + ax * STEP,
-                    T_cur[1] + ay * STEP,
-                    T_cur[2] + az * STEP
-                };
-
-                // Safety clamps: limit workspace
-                T_target[0] = constrain(T_target[0], -1.0f, 1.0f);
-                T_target[1] = constrain(T_target[1], -1.0f, 1.0f);
-                T_target[2] = constrain(T_target[2], -1.0f, 1.0f);
-
-                // Allow movement only when button is held and inputs are active
-                valid = true;
-                digitalWrite(ENABLE_MOTORS, LOW);
-                digitalWrite(ENABLE_MOTORS_2, LOW);
-
-                // Move in short increments per frame; keep PWM continuous across frames
-                moveplat(0.10f, zero_length, T_cur, T_target, R_cur, q_target);
-                for (int i = 0; i < 3; ++i) T_cur[i] = T_target[i];
-                // Keep orientation locked to identity in D-pad mode
-                R_cur = Quaternion(1, 0, 0, 0);
-            }
-        } else if (c == 'S') {
-            // Controller-only: ignore stop commands
-            Serial.read();
-        } else if (c == 'E') {
-            // Controller-only: ignore enable commands
-            Serial.read();
-        } else if (c == 'D') {
-            // Controller-only: ignore disable commands
-            Serial.read();
-        } else if (c == 'U') {
-            // Ignore jog commands in controller-only mode
-            Serial.read();
-        } else if (c == 'R') {
-            // Ignore jog commands in controller-only mode
-            Serial.read();
-        } else {
-            // Consume and ignore whitespace/newlines and any unexpected bytes
-            char u = Serial.read();
-            (void)u; // no logging to avoid noise on line endings
-        }
-    }
+  #ifdef ENABLE_MOTORS_2
+  digitalWrite(ENABLE_MOTORS_2, en ? LOW : HIGH);
+  #endif
 }
 
-//Gets the average values from the feedback pins
-//Needed to smooth out the noise
-//TO DO: see how changing NUM_READINGS affects the stability of the readings and the delay caused by taking a reading
+void stopThisHoe() {
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
+  setMotorsEnabled(false);
+  mode = MODE_IDLE;
+  stop_requested = false;
+  Serial.println("STOPPED");
+}
+
+// ------------------------- Setup -------------------------
+void setup() {
+  Serial.begin(BAUD_RATE);
+  Serial.setTimeout(30);
+  while (!Serial) {}
+
+  // Pins
+  for (motor = 0; motor < NUM_MOTORS; ++motor) {
+    pinMode(DIR_PINS[motor], OUTPUT);
+    digitalWrite(DIR_PINS[motor], LOW);
+
+    pinMode(PWM_PINS[motor], OUTPUT);
+    analogWrite(PWM_PINS[motor], 0);
+
+    pinMode(POT_PINS[motor], INPUT);
+  }
+
+  pinMode(ENABLE_MOTORS, OUTPUT);
+  digitalWrite(ENABLE_MOTORS, HIGH);
+
+  #ifdef ENABLE_MOTORS_2
+  pinMode(ENABLE_MOTORS_2, OUTPUT);
+  digitalWrite(ENABLE_MOTORS_2, HIGH);
+  #endif
+
+  // zero_length
+  for (int i = 0; i < 3; i++) {
+    float d = plat_0[i] + plat_1[i] - base_1[i];
+    zero_length += d * d;
+  }
+  zero_length = sqrt(zero_length);
+
+  // Calibrate (from your first sketch)
+  calibration_valid = true;
+  Serial.println("Calibrating");
+  calibrate();
+  Serial.println("Calibrating Done");
+
+  // Rotations
+  R0 = azi_alt_to_rot(0.0, 0.0);
+  R1 = azi_alt_to_rot(0.0, 10.0);
+  R2 = azi_alt_to_rot(90.0, 10.0);
+  R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
+
+  Serial.println("Ready. Commands: center | controller | start | stop");
+}
+
+// ------------------------- Loop -------------------------
+void loop() {
+  // Always watch for text commands
+  checkTextCommands();
+
+  // Always accept joystick frames; only moves if mode == MODE_CONTROLLER
+  handleJoystickFrames();
+
+  // Scripted sequence
+  if (mode == MODE_SCRIPT) {
+    Serial.println("Running scripted motion sequence");
+
+    moveplat(dur, zero_length, T0, T1, R0, R0);
+    moveplat(dur, zero_length, T1, TX, R0, R0);
+    moveplat(dur, zero_length, TX, T1, R0, R0);
+    moveplat(dur, zero_length, T1, TY, R0, R0);
+    moveplat(dur, zero_length, TY, T1, R0, R0);
+    moveplat(5.0f, zero_length, T1, TZ, R0, R0);
+
+    Serial.println("Script complete");
+    stopThisHoe();
+  }
+
+  delay(2);
+}
+
+// ------------------------- Text commands: center/start/controller/stop -------------------------
+void checkTextCommands() {
+  static String buf = "";
+
+  while (Serial.available()) {
+    char c = Serial.peek();
+
+    // If it's a joystick frame, don’t eat it here
+    if (c == 'J') return;
+
+    c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      buf.trim();
+      buf.toLowerCase();
+
+      if (buf.length() == 0) { buf = ""; continue; }
+
+      if (buf == "stop") {
+        stop_requested = true;
+        stopThisHoe();
+      }
+      else if (buf == "center") {
+        Serial.println("Centering...");
+        stop_requested = false;
+
+        setMotorsEnabled(true);
+
+        // Go to home pose
+        moveplat(3.0f, zero_length, T0, T0, R0, R0);
+
+        // Update controller pose trackers (so controller starts from centered)
+        T_cur[0] = 0; T_cur[1] = 0; T_cur[2] = 0;
+        R_cur = Quaternion(1, 0, 0, 0);
+
+        // Disable after centering
+        for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
+        setMotorsEnabled(false);
+
+        centered = true;
+        mode = MODE_IDLE;
+        Serial.println("Centered. Motors disabled.");
+      }
+      else if (buf == "controller") {
+        if (!centered) {
+          Serial.println("Refusing: run 'center' first");
+        } else {
+          setMotorsEnabled(true);
+          mode = MODE_CONTROLLER;
+          Serial.println("Controller mode ON (J frames drive platform). Type 'stop' to exit.");
+        }
+      }
+      else if (buf == "start") {
+        if (!centered) {
+          Serial.println("Refusing: run 'center' first");
+        } else {
+          setMotorsEnabled(true);
+          mode = MODE_SCRIPT;
+          Serial.println("Script mode ON. Type 'stop' to abort.");
+        }
+      }
+      else {
+        Serial.print("Unknown command: ");
+        Serial.println(buf);
+      }
+
+      buf = "";
+    } else {
+      buf += c;
+    }
+  }
+}
+
+// ------------------------- Joystick frames from your Python sender -------------------------
+// Python sends: "J ax ay az azi alt yaw\n"
+void handleJoystickFrames() {
+  if (mode != MODE_CONTROLLER) return;
+  if (Serial.available() <= 0) return;
+  if (Serial.peek() != 'J') return;
+
+  Serial.read(); // consume 'J'
+  float ax  = Serial.parseFloat();
+  float ay  = Serial.parseFloat();
+  float az  = Serial.parseFloat();
+  float azi = Serial.parseFloat();  // used as enable flag in your Python
+  float alt = Serial.parseFloat();  // degrees
+  float yaw = Serial.parseFloat();  // degrees
+
+  // “Enable flag” behavior: if azi is not active, stop PWM and do nothing
+  if (azi < 0.5f) {
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
+    return;
+  }
+
+  // Deadband like your Python
+  const float dead_t = 0.05f;
+  const float dead_a = 0.5f;
+
+  bool active =
+      (fabsf(ax)  > dead_t) ||
+      (fabsf(ay)  > dead_t) ||
+      (fabsf(az)  > dead_t) ||
+      (fabsf(alt) > dead_a) ||
+      (fabsf(yaw) > dead_a);
+
+  if (!active) {
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
+    return;
+  }
+
+  // Translation step per received frame
+  const float STEP_IN = 0.02f; // match your earlier feel (~0.6 in/s @ 30Hz)
+  float T_target[3] = {
+    T_cur[0] + ax * STEP_IN,
+    T_cur[1] + ay * STEP_IN,
+    T_cur[2] + az * STEP_IN
+  };
+
+  // Workspace clamps (tune these)
+  T_target[0] = constrain(T_target[0], -1.0f, 1.0f);
+  T_target[1] = constrain(T_target[1], -1.0f, 1.0f);
+  T_target[2] = constrain(T_target[2], -1.0f, 1.0f);
+
+  // Rotation target from alt/yaw
+  // - alt: tilt magnitude (degrees) about a joystick-provided axis in your Python (ry)
+  //   Your Python uses alt as pitch-ish. Here we interpret alt as "altitude" tilt toward heading 0.
+  // - yaw: yaw about Z (degrees)
+  Quaternion q_tilt = azi_alt_to_rot(0.0f, alt);
+  Quaternion q_yaw  = Quaternion(cos((yaw * DEG_TO_RAD) / 2.0f), 0, 0, sin((yaw * DEG_TO_RAD) / 2.0f));
+  Quaternion q_target = q_yaw * q_tilt;
+
+  // Short move each frame
+  moveplat(0.10f, zero_length, T_cur, T_target, R_cur, q_target);
+
+  // Update trackers
+  for (int i = 0; i < 3; ++i) T_cur[i] = T_target[i];
+  R_cur = q_target;
+}
+
+// ------------------------- Core motion math (from your first sketch) -------------------------
 inline int getAverageReading(uint8_t motor)
 {
-    reading_sum = 0;
-    for (reading = 0; reading < NUM_READINGS; ++reading)
-    {
-        reading_sum += analogRead(POT_PINS[motor]);
-    }
-    return reading_sum / NUM_READINGS;
+  reading_sum = 0;
+  for (reading = 0; reading < NUM_READINGS; ++reading) {
+    reading_sum += analogRead(POT_PINS[motor]);
+  }
+  return reading_sum / NUM_READINGS;
 }
 
-//Standard mapping function
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
-    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-//Moves all motors
 inline void moveAll(MotorDirection dir)
 {
-    for (motor = 0; motor < NUM_MOTORS; ++motor)
-    {
-        digitalWrite(DIR_PINS[motor], dir);
-        analogWrite(PWM_PINS[motor], MAX_PWM);
-    }
+  for (motor = 0; motor < NUM_MOTORS; ++motor) {
+    digitalWrite(DIR_PINS[motor], dir);
+    analogWrite(PWM_PINS[motor], MAX_PWM);
+  }
 }
-
 
 inline void calibrate()
 {
-    // Extend all actuators
-    moveAll(EXTEND);
-    #if ENABLE_PRINT_HEADERS
-    Serial.println("Extending");
-    #endif
-    delay(RESET_DELAY);
+  moveAll(EXTEND);
+  Serial.println("Extending");
+  delay(RESET_DELAY);
 
-    // Stop the extension, get averaged analog readings
-    for (motor = 0; motor < NUM_MOTORS; ++motor)
-    {
-        analogWrite(PWM_PINS[motor], 0);
-        end_readings[motor] = getAverageReading(motor);
+  for (motor = 0; motor < NUM_MOTORS; ++motor) {
+    analogWrite(PWM_PINS[motor], 0);
+    end_readings[motor] = getAverageReading(motor);
+    calibration_valid = (abs(end_readings[motor] - END_POS[motor]) < OFF_THRESHOLD);
+    if (!calibration_valid) break;
+  }
 
-        // Check if the motors are powered (reading is valid)
-        calibration_valid = (abs(end_readings[motor] - END_POS[motor]) < OFF_THRESHOLD);
-        if (!calibration_valid)
-        {
-            break;
-        }
+  moveAll(RETRACT);
+  Serial.println("Retracting");
+  delay(RESET_DELAY);
+
+  if (calibration_valid) {
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+      analogWrite(PWM_PINS[motor], 0);
+      zero_readings[motor] = getAverageReading(motor);
+      calibration_valid = (abs(zero_readings[motor] - ZERO_POS[motor]) < OFF_THRESHOLD);
+      if (!calibration_valid) break;
     }
-    // Retract all actuators
-    moveAll(RETRACT);
-    #if ENABLE_PRINT_HEADERS
-    Serial.println("Retracting");
-    #endif
-    delay(RESET_DELAY);
+  }
 
-    // Stop the retraction, get averaged analog readings
-    if (calibration_valid)
-    {
-        for (motor = 0; motor < NUM_MOTORS; ++motor)
-        {
-            analogWrite(PWM_PINS[motor], 0);
-            zero_readings[motor] = getAverageReading(motor);
-
-            // Check if the motors are powered (reading is valid)
-            calibration_valid = (abs(zero_readings[motor] - ZERO_POS[motor]) < OFF_THRESHOLD);
-            if (!calibration_valid)
-            {
-                break;
-            }
-        }
+  if (calibration_valid) {
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+      END_POS[motor]  = end_readings[motor];
+      ZERO_POS[motor] = zero_readings[motor];
     }
-
-    // Set the new calibration values if found to be valid
-    if (calibration_valid)
-    {
-        for (motor = 0; motor < NUM_MOTORS; ++motor)
-        {
-            END_POS[motor] = end_readings[motor];
-            ZERO_POS[motor] = zero_readings[motor];
-        }
-    }
-
-    // Print the calibration result (new max/min values, or a warning)
-    #if ENABLE_PRINT_HEADERS
-    {
-        if (calibration_valid)
-        {
-            Serial.print("<COM> Finished calibration:\n");
-
-            // Print minimum positions
-            Serial.print("      MIN POS: ");
-            for (motor = 0; motor < NUM_MOTORS; ++motor)
-            {
-                Serial.print(ZERO_POS[motor]);
-                Serial.print(" ");
-            }
-            Serial.print("\n");
-
-            // Print maximum positions
-            Serial.print("      MAX POS: ");
-            for (motor = 0; motor < NUM_MOTORS; ++motor)
-            {
-                Serial.print(END_POS[motor]);
-                Serial.print(" ");
-            }
-            Serial.print("\n");
-
-            // Print CR to end message block
-            Serial.print("\r");
-        }
-
-        else
-        {
-            // Print an error message for calibration failure
-            Serial.print("<COM> Failed calibration (using default values).\n");
-            Serial.print("      Please verify that the actuators are powered on.\n\r");
-        }
-    }
-    #endif // ENABLE_PRINT
+  }
 }
 
-//Function where allows you to linearly interpolate between two positions from t=0 to t=1
-//Takes array T as an argument, and changes the values of T (instead of returning a new array like python)
 void lerp(const float pos0[3], const float pos1[3], float t, float T[3]) {
-  
   for (int i = 0; i < 3; i++) {
     T[i] = (1 - t) * pos0[i] + t * pos1[i];
   }
 }
 
-//Preliminary work to move the platform in a [flat or upward/downward] and [constant radius or expanding/contracting] spiral
-//TO DO: use OOP to make a class that encompasses a variety of motions that moveplat() can take as an argument
-//I tried to do this but I ran out of time
-////void spiral(const float r0, const float rf, const float h, const float T_0[3], int steps, float T[3]) {
-////  float r_t = t * rf + (1 - t) * r0;
-////
-////  for(t in steps; t<steps; t++){
-////  T[0][step] = r_t * cos(2*PI*t);
-////  T[1][step] = r_t * sin(2*PI*t);
-////  T[2][step] = h * t;
-////  }
-////}
+inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1)
+{
+  int steps = (int)(duration * 10.0f);
+  if (steps < 1) steps = 1;
 
-//moves the platform
-inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1){
+  float Kp = 0.25f;
 
-    int steps = (int)(duration * 30); // smoothing (~30 Hz)
-    if (steps < 1) steps = 1;
-    float Kp = 0.0f; // remove proportional correction to eliminate jitter near target
-    
-    //keeps track of average error for iteration of Kp for PID
-    float avg_error[NUM_MOTORS] = { 0, 0, 0, 0, 0, 0 };
+  for (int step = 0; step <= steps; step++) {
 
-    for (int step = 0; step < steps; ++step) {
-        unsigned long start_time = millis();
-        float t = float(step) / steps;
-        // No watchdog here; loop drives short steps per frame
-        float t_next = float(step+1) / steps;
+    // stop support
+    if (stop_requested) return;
 
-        //slerp is similar to lerp, but interpolations between rotations instead of translations
-        //more info in Quaternion library
-        Quaternion rot_t = slerp(q0, q1, t);
-        Quaternion rot_next = slerp(q0, q1, t_next);
-  
-        //Declare and define translations
-        float T_t[3];
-        float T_next[3];
-        
-        lerp(pos0, pos1, t, T_t);
-        lerp(pos0, pos1, t_next, T_next);
-  
-        float pwm[6];
+    unsigned long start_time = millis();
+    float t      = float(step) / steps;
+    float t_next = float(step + 1) / steps;
 
-        //performs inverse kinematics on the motors to figure out the current and next positions
-        //figures out the transformation and rotation for a given step, then applies to each point of the platform
-        for (motor = 0; motor < NUM_MOTORS; ++motor) {
-            // CHANGED TO CONST FLOAT*
-            const float* base = bases[motor];
-            const float* plat = plats[motor];
-  
-            float rotated[3];
-            float rotated_next[3];
-            
-            rot_t.rotate(plat).toVector(rotated);
-            rot_next.rotate(plat).toVector(rotated_next);
-            
-            float plat_t[3];
-            float plat_next[3];
-            
-            for (int i = 0; i < 3; i++) {
-                plat_t[i] = rotated[i] + T_t[i] + plat_0[i];
-                plat_next[i] = rotated_next[i] + T_next[i] + plat_0[i];
-            }
-  
-            float length_t = 0;
-            float length_next = 0;
+    Quaternion rot_t    = slerp(q0, q1, t);
+    Quaternion rot_next = slerp(q0, q1, t_next);
 
-            //figures out the length of the actuator at the current and next step
-            for (int i = 0; i < 3; i++) {
-                float d = plat_t[i] - base[i];
-                float d_next = plat_next[i] - base[i];
-                
-                length_t += d * d;
-                length_next += d_next * d_next;
-            }
-            length_t = sqrt(length_t);
-            length_next = sqrt(length_next);
-            
-            // Pure feedforward velocity based on IK only (ignore pot feedback until calibrated)
-            float vel = (length_next - length_t) * steps / duration;
+    float T_t[3], T_next[3];
+    lerp(pos0, pos1, t, T_t);
+    lerp(pos0, pos1, t_next, T_next);
 
-            // Simple clamp and deadband mapping to PWM, no hysteresis/filtering
-            const float V_MAX = 0.20f;
-            if (vel >  V_MAX) vel =  V_MAX;
-            if (vel < -V_MAX) vel = -V_MAX;
+    float pwm_local[NUM_MOTORS];
 
-            const float V_DEADBAND = 0.03f;
-            if (fabsf(vel) < V_DEADBAND) {
-                pwm[motor] = 0;
-                // do not change last_dir when stopped
-            } else {
-                int pwm_speed = (int)mapFloat(fabsf(vel), V_DEADBAND, V_MAX, 40, 255);
-                pwm[motor] = constrain(pwm_speed, 0, 255);
-                last_dir[motor] = (vel > 0) ? +1 : -1; // update direction only when moving
-            }
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+      const float* base = bases[motor];
+      const float* plat = plats[motor];
 
-              
-              //safety measure to stop the platform in case the actuators drift too far
-//            if (abs(error) > .5){
-//              Serial.print("Invalid Length: ");
-//              Serial.print(length_t);
-//              Serial.print(", ");
-//              Serial.println(length_now);
-//              //valid = false;
-//            }
+      float rotated[3], rotated_next[3];
+      rot_t.rotate(plat).toVector(rotated);
+      rot_next.rotate(plat).toVector(rotated_next);
 
-        }
-  
-                if (!valid){
-          for (motor = 0; motor < NUM_MOTORS; ++motor)
-          {
-                        pwm[motor] = 0;
-          }
-          break;
-        }
-        
-        Serial.print('\n');
-       
-        // Sets the pwm values and direction deterministically per motor
-        for (motor = 0; motor < NUM_MOTORS; ++motor) {
-            if (pwm[motor] == 0) {
-                analogWrite(PWM_PINS[motor], 0);
-            } else {
-                digitalWrite(DIR_PINS[motor], (last_dir[motor] > 0) ? EXTEND : RETRACT);
-                analogWrite(PWM_PINS[motor], pwm[motor]);
-            }
-//            Serial.print(pwm[motor]);
-//            if (motor < 5) Serial.print(", ");
-        }
-        //Serial.println("]");
-                unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
-                unsigned long end_time = start_time + target_delay;
-                //more accurate delay function
-                while (millis() < end_time) {
-                    // busy wait
-                }
-                //Serial.println(cur_time - start_time);
-            }
+      float plat_t[3], plat_next[3];
+      for (int i = 0; i < 3; i++) {
+        plat_t[i]    = rotated[i]      + T_t[i]    + plat_0[i];
+        plat_next[i] = rotated_next[i] + T_next[i] + plat_0[i];
+      }
 
-    Serial.print('\n');
-//  Serial.print("Error Accumulated: ");
-//  for (motor = 0; motor < NUM_MOTORS; ++motor)
-//  {
-//     analogWrite(PWM_PINS[motor], 0);
-//     Serial.print(avg_error[motor], 6);
-//     Serial.print(" ");
-//  }
-//  Serial.print('\n');
-//  Serial.print('\n');
+      float length_t = 0, length_next = 0;
+      for (int i = 0; i < 3; i++) {
+        float d      = plat_t[i]    - base[i];
+        float d_next = plat_next[i] - base[i];
+        length_t    += d * d;
+        length_next += d_next * d_next;
+      }
+      length_t    = sqrt(length_t);
+      length_next = sqrt(length_next);
+
+      float reading_now = getAverageReading(motor);
+      float length_now = mapFloat(reading_now, ZERO_POS[motor], END_POS[motor], 0, 8) + length_min;
+      float error = length_t - length_now;
+
+      float vel = (length_next - length_t + error * Kp) * steps / duration;
+
+      if (fabsf(vel) > 2.0f) vel = 2.0f * ((vel > 0) ? 1.0f : -1.0f);
+
+      int pwm_speed = (int)mapFloat(vel, 0, 2, 0, 255);
+      if (abs(pwm_speed) < 25) pwm_speed = 0;
+      pwm_local[motor] = pwm_speed;
+    }
+
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+      digitalWrite(DIR_PINS[motor], (pwm_local[motor] > 0) ? EXTEND : RETRACT);
+      analogWrite(PWM_PINS[motor], abs((int)pwm_local[motor]));
+    }
+
+    unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
+    while ((millis() - start_time) < target_delay) { }
+  }
 }
