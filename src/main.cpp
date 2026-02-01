@@ -4,26 +4,26 @@
 #include "Quaternion.h"
 #include "platform.h"
 
-// ------------------------- Actuator variables -------------------------
+// Actuator variables 
 uint8_t pwm_cmd[NUM_MOTORS];
 MotorDirection dir_cmd[NUM_MOTORS];
 
-// ------------------------- Position variables -------------------------
+// Position variables
 int16_t pos[NUM_MOTORS];
 int16_t input[NUM_MOTORS];
 uint16_t desired_pos[NUM_MOTORS];
 
-// ------------------------- Calibration variables -------------------------
+// Calibration variables 
 int16_t end_readings[NUM_MOTORS];
 int16_t zero_readings[NUM_MOTORS];
 bool calibration_valid;
 
-// ------------------------- Iterator/sum variables -------------------------
+// Iterator/sum variables 
 uint8_t motor;
 uint8_t reading;
 int32_t reading_sum;
 
-// ------------------------- Quaternions / transforms -------------------------
+// Quaternions / transforms 
 Quaternion R0, R1, R2, R3;
 
 float T0[3] = {0, 0, 0};
@@ -47,9 +47,6 @@ float T_BACK[3]    = {0, -3.0, 2};  // D-pad DOWN
 float T_RIGHT[3]   = {3.0, 0, 2};   // D-pad RIGHT
 float T_LEFT[3]    = {-3.0, 0, 2};  // D-pad LEFT
 
-
-
-// ------------------------- Mode control -------------------------
 enum ControlMode : uint8_t {
   MODE_IDLE = 0,
   MODE_SCRIPT,
@@ -58,11 +55,17 @@ enum ControlMode : uint8_t {
 
 static ControlMode mode = MODE_IDLE;
 
-// Controller state (current target pose)
+enum PresetID : uint8_t {
+  PRESET_NONE = 0,
+  PRESET_DEMO,
+  PRESET_FIGURE8
+};
+
+static PresetID active_preset = PRESET_NONE;
+
 static float T_cur[3] = {0, 0, 2};
 static Quaternion R_cur = Quaternion(1, 0, 0, 0);
 
-// ------------------------- Forward declarations -------------------------
 inline int getAverageReading(uint8_t motor);
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
 inline void moveAll(MotorDirection dir);
@@ -73,10 +76,10 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 void setMotorsEnabled(bool en);
 void stopThisHoe();
 
-void checkTextCommands();     // parses "center/start/controller/stop"
+void checkTextCommands();     
 void handleJoystickFrames();  // parses "J ax ay az azi alt yaw\n"
 
-// ------------------------- Helpers: motor enable/stop -------------------------
+// Motors start / stop
 void setMotorsEnabled(bool en) {
   // HIGH = disable, LOW = enable
   digitalWrite(ENABLE_MOTORS, en ? LOW : HIGH);
@@ -86,7 +89,30 @@ void setMotorsEnabled(bool en) {
   #endif
 }
 
-// ------------------------- Setup -------------------------
+void runPreset(PresetID p) {
+  switch (p) {
+
+    case PRESET_DEMO:
+      moveplat(dur, zero_length, T0, T1, R0, R0);
+      moveplat(dur, zero_length, T1, TX, R0, R0);
+      moveplat(dur, zero_length, TX, T1, R0, R0);
+      moveplat(dur, zero_length, T1, TY, R0, R0);
+      moveplat(dur, zero_length, TY, T1, R0, R0);
+      moveplat(5.0f, zero_length, T1, TZ, R0, R0);
+      break;
+
+    case PRESET_FIGURE8:
+      // placeholder for later
+      break;
+
+    default:
+      Serial.println("No preset selected");
+      break;
+  }
+}
+
+
+// Setup
 void setup() {
   Serial.begin(BAUD_RATE);
   Serial.setTimeout(30);
@@ -118,7 +144,7 @@ void setup() {
   }
   zero_length = sqrt(zero_length);
 
-  // Calibrate (from your first sketch)
+  // Calibrate
   calibration_valid = true;
   Serial.println("Calibrating");
   calibrate();
@@ -133,34 +159,65 @@ void setup() {
   Serial.println("Ready. Commands: center | controller | start | stop");
 }
 
-// ------------------------- Loop -------------------------
+// Loop
 void loop() {
 
   // Always watch for text commands
   checkTextCommands();
 
-  // Always accept joystick frames; only moves if mode == MODE_CONTROLLER
+  // Always accept joystick frames, only moves if mode == MODE_CONTROLLER
   handleJoystickFrames();
 
   // Scripted sequence
   if (mode == MODE_SCRIPT) {
-    Serial.println("Running scripted motion sequence");
 
-    moveplat(dur, zero_length, T0, T1, R0, R0);
-    moveplat(dur, zero_length, T1, TX, R0, R0);
-    moveplat(dur, zero_length, TX, T1, R0, R0);
-    moveplat(dur, zero_length, T1, TY, R0, R0);
-    moveplat(dur, zero_length, TY, T1, R0, R0);
-    moveplat(5.0f, zero_length, T1, TZ, R0, R0);
+    if (!centered) {
+      doCenter();
+    }
 
-    Serial.println("Script complete");
-    //stopThisHoe();
+    Serial.println("Running preset");
+    runPreset(active_preset);
+  
+    // clean shutdown
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+      analogWrite(PWM_PINS[m], 0);
+    }
+  
+    setMotorsEnabled(false);
+    mode = MODE_IDLE;
+    active_preset = PRESET_NONE;
+  
+    Serial.println("Preset complete. Motors disabled.");
   }
 
   delay(2);
 }
 
-// ------------------------- Text commands: center/start/controller/stop -------------------------
+void doCenter() {
+  Serial.println("Centering...");
+  stop_requested = false;
+
+  setMotorsEnabled(true);
+
+  moveplat(3.0f, zero_length, T0, T0, R0, R0);
+
+  T_cur[0] = 0;
+  T_cur[1] = 0;
+  T_cur[2] = 2.0f;
+  R_cur = Quaternion(1, 0, 0, 0);
+
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    analogWrite(PWM_PINS[m], 0);
+  }
+
+  setMotorsEnabled(false);
+  centered = true;
+  mode = MODE_IDLE;
+
+  Serial.println("Centered. Motors disabled.");
+}
+
+// Text commands: center/start/controller/stop
 void checkTextCommands() {
   static String buf = "";
 
@@ -179,28 +236,15 @@ void checkTextCommands() {
 
       if (buf == "stop") {
         stop_requested = true;
-        //stopThisHoe();
+        mode = MODE_IDLE;
+        active_preset = PRESET_NONE;
+        centered = false;
+        setMotorsEnabled(false);
+      
+        Serial.println("STOP received. All motion halted.");
       }
       else if (buf == "center") {
-        Serial.println("Centering...");
-        stop_requested = false;
-
-        setMotorsEnabled(true);
-
-        // Go to home pose
-        moveplat(3.0f, zero_length, T0, T0, R0, R0);
-
-        // Update controller pose trackers (start from common working height)
-        T_cur[0] = 0; T_cur[1] = 0; T_cur[2] = 2.0f;
-        R_cur = Quaternion(1, 0, 0, 0);
-
-        // Disable after centering
-        for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-        setMotorsEnabled(false);
-
-        centered = true;
-        mode = MODE_IDLE;
-        Serial.println("Centered. Motors disabled.");
+        doCenter();
       }
       else if (buf == "controller") {
         if (!centered) {
@@ -211,14 +255,29 @@ void checkTextCommands() {
           Serial.println("Controller mode ON (J frames drive platform). Type 'stop' to exit.");
         }
       }
-      else if (buf == "start") {
-        if (!centered) {
-          Serial.println("Refusing: run 'center' first");
-        } else {
-          setMotorsEnabled(true);
-          mode = MODE_SCRIPT;
-          Serial.println("Script mode ON. Type 'stop' to abort.");
+      else if (buf.startsWith("start")) {
+        //doCenter();
+
+        String arg = buf.substring(5);
+        arg.trim();
+      
+        if (arg == "demo") {
+          active_preset = PRESET_DEMO;
         }
+        else if (arg == "figure8") {
+          active_preset = PRESET_FIGURE8;
+        }
+        else {
+          Serial.println("Unknown preset");
+          buf = "";
+          return;
+        }
+      
+        setMotorsEnabled(true);
+        mode = MODE_SCRIPT;
+      
+        Serial.print("Starting preset: ");
+        Serial.println(arg);
       }
       else {
         Serial.print("Unknown command: ");
@@ -232,7 +291,7 @@ void checkTextCommands() {
   }
 }
 
-// ------------------------- Joystick frames from your Python sender -------------------------
+// Joystick frames
 // Python sends: "J ax ay az azi alt yaw\n"
 void handleJoystickFrames() {
   if (mode != MODE_CONTROLLER) return;
@@ -297,7 +356,7 @@ void handleJoystickFrames() {
   // Lock rotation flat
   Quaternion q_flat = Quaternion(1, 0, 0, 0);
 
-  // Move to the target position (takes ~1 second)
+  // Move to the target positio
   moveplat(1.0f, zero_length, T_cur, target_pos, q_flat, q_flat);
 
   // Update current position tracker
@@ -313,7 +372,7 @@ void handleJoystickFrames() {
 }
 
 
-// ------------------------- Core motion math (from your first sketch) -------------------------
+// Math computations
 inline int getAverageReading(uint8_t motor)
 {
   reading_sum = 0;
