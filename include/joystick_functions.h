@@ -32,8 +32,8 @@ inline void updateJoystickInputFlag() {
     float ay  = Serial.parseFloat();
     (void)Serial.parseFloat();         // az (unused)
     float azi = Serial.parseFloat();   // enable flag
-    (void)Serial.parseFloat();         // alt (unused)
-    (void)Serial.parseFloat();         // yaw (unused)
+    float alt = Serial.parseFloat();   // tilt forward/back (right stick Y)
+    float yaw = Serial.parseFloat();   // tilt left/right (right stick X)
 
     // Update last frame timestamp
     g_lastJFrameMs = millis();
@@ -44,10 +44,18 @@ inline void updateJoystickInputFlag() {
     }
 
     const float dead_t = 0.05f;
+    const float dead_rot = 3.0f;  // deadzone for tilt direction
+
     float sx = (ax > dead_t) ? 1.0f : (ax < -dead_t ? -1.0f : 0.0f);
     float sy = (ay > dead_t) ? 1.0f : (ay < -dead_t ? -1.0f : 0.0f);
 
-    if (sx == 0.0f && sy == 0.0f) {
+    // Determine tilt direction from right stick
+    float tilt_x = (yaw > dead_rot) ? 1.0f : (yaw < -dead_rot ? -1.0f : 0.0f);
+    float tilt_y = (alt > dead_rot) ? 1.0f : (alt < -dead_rot ? -1.0f : 0.0f);
+
+    bool has_tilt = (tilt_x != 0.0f || tilt_y != 0.0f);
+
+    if (sx == 0.0f && sy == 0.0f && !has_tilt) {
       joystick_input_active = false;
     } else {
       joystick_input_active = true;
@@ -71,8 +79,8 @@ inline void handleJoystickFrames() {
   float ay  = Serial.parseFloat();
   (void)Serial.parseFloat();         // az (unused)
   float azi = Serial.parseFloat();   // enable flag
-  (void)Serial.parseFloat();         // alt (unused)
-  (void)Serial.parseFloat();         // yaw (unused)
+  float alt = Serial.parseFloat();   // tilt forward/back (right stick Y)
+  float yaw = Serial.parseFloat();   // tilt left/right (right stick X)
 
   // Update last frame timestamp
   g_lastJFrameMs = millis();
@@ -84,10 +92,18 @@ inline void handleJoystickFrames() {
   }
 
   const float dead_t = 0.05f;
+  const float dead_rot = 3.0f;  // deadzone for tilt direction
+
   float sx = (ax > dead_t) ? 1.0f : (ax < -dead_t ? -1.0f : 0.0f);
   float sy = (ay > dead_t) ? 1.0f : (ay < -dead_t ? -1.0f : 0.0f);
 
-  if (sx == 0.0f && sy == 0.0f) {
+  // Determine tilt direction from right stick
+  float tilt_x = (yaw > dead_rot) ? 1.0f : (yaw < -dead_rot ? -1.0f : 0.0f);   // left/right
+  float tilt_y = (alt > dead_rot) ? 1.0f : (alt < -dead_rot ? -1.0f : 0.0f);   // forward/back
+
+  bool has_tilt = (tilt_x != 0.0f || tilt_y != 0.0f);
+
+  if (sx == 0.0f && sy == 0.0f && !has_tilt) {
     joystick_input_active = false;
     stopMotors();
     return;
@@ -98,15 +114,42 @@ inline void handleJoystickFrames() {
   float step = 0.25f;
   float dur  = 0.12f;
 
+  // Calculate target position
   float target[3] = { T_cur[0] + step * sx, T_cur[1] + step * sy, Z_HOME };
   target[0] = constrain(target[0], -3.0f, 3.0f);
   target[1] = constrain(target[1], -3.0f, 3.0f);
 
-  Quaternion q_flat(1, 0, 0, 0);
-  moveplat(dur, zero_length, T_cur, target, q_flat, q_flat);
+  // Simple directional tilt (10 degrees in cardinal directions)
+  const float tilt_angle = 10.0f;  // degrees
+  const float half_rad = tilt_angle * PI / 360.0f;  // half angle in radians
+  const float c = cos(half_rad);
+  const float s = sin(half_rad);
+
+  Quaternion q_target;
+  if (has_tilt) {
+    if (tilt_y > 0.5f) {
+      // Tilt FORWARD (rotate around X axis, positive)
+      q_target = Quaternion(c, s, 0, 0);
+    } else if (tilt_y < -0.5f) {
+      // Tilt BACK (rotate around X axis, negative)
+      q_target = Quaternion(c, -s, 0, 0);
+    } else if (tilt_x > 0.5f) {
+      // Tilt RIGHT (rotate around Y axis, positive)
+      q_target = Quaternion(c, 0, s, 0);
+    } else if (tilt_x < -0.5f) {
+      // Tilt LEFT (rotate around Y axis, negative)
+      q_target = Quaternion(c, 0, -s, 0);
+    } else {
+      q_target = Quaternion(1, 0, 0, 0);  // identity (no rotation)
+    }
+  } else {
+    q_target = Quaternion(1, 0, 0, 0);  // identity (no rotation)
+  }
+
+  moveplat(dur, zero_length, T_cur, target, R_cur, q_target);
 
   T_cur[0] = target[0];
   T_cur[1] = target[1];
   T_cur[2] = Z_HOME;     // ensure height stays fixed
-  R_cur = q_flat;
+  R_cur = q_target;
 }

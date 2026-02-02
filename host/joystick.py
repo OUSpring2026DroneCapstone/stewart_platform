@@ -68,8 +68,6 @@ class JoystickBackend:
                     self.on_command("center")
                 elif b == 3:      # Y
                     self.on_command("start demo")
-                elif b == 6:      # Back
-                    self.toggle_mode()
 
     # ---------------- main update ----------------
     def tick(self):

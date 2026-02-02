@@ -32,6 +32,7 @@ def main():
 
     font_title = pygame.font.SysFont("Segoe UI", 22, bold=True)
     font = pygame.font.SysFont("Segoe UI", 16)
+    font_small = pygame.font.SysFont("Segoe UI", 13)
 
     # ---------------- serial (optional) ----------------
     ser = None
@@ -226,9 +227,88 @@ def main():
             )
             screen.blit(tag, (40, 210))
 
+        # ---- joystick mode toggle (bottom of left panel) ----
+        if joystick.available:
+            mode_y = HEIGHT - 180
+            mode_label = font.render("JOYSTICK MODE", True, TEXT_MUTED)
+            screen.blit(mode_label, (40, mode_y))
+
+            mode_toggle_rect = pygame.Rect(60, mode_y + 35, 260, 46)
+            mode_hover = mode_toggle_rect.collidepoint(mouse_pos)
+            mode_color = BTN_HOVER if mode_hover else BTN
+
+            pygame.draw.rect(screen, mode_color, mode_toggle_rect, border_radius=10)
+            pygame.draw.rect(screen, BTN_BORDER, mode_toggle_rect, 2, border_radius=10)
+
+            mode_text = "D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"
+            mode_txt = font.render(mode_text, True, TEXT_MAIN)
+            screen.blit(
+                mode_txt,
+                (mode_toggle_rect.centerx - mode_txt.get_width() // 2,
+                 mode_toggle_rect.centery - mode_txt.get_height() // 2)
+            )
+
+            if clicked and mode_hover:
+                joystick.toggle_mode()
+                print(f"[Mode] Switched to {'D-PAD' if joystick.dpad_mode else 'ANALOG'}")
+
         # ---- visualization panel ----
         pygame.draw.rect(screen, VIZ_BG, viz_panel, border_radius=14)
         pygame.draw.rect(screen, VIZ_BORDER, viz_panel, 2, border_radius=14)
+
+        # ---- control scheme display ----
+        if joystick.available:
+            info_y = viz_panel.top + 30
+            info_x = viz_panel.left + 30
+
+            # Title
+            controls_title = font_title.render("CONTROLS", True, (40, 50, 65))
+            screen.blit(controls_title, (info_x, info_y))
+
+            info_y += 50
+
+            if joystick.dpad_mode:
+                # D-PAD MODE controls
+                controls = [
+                    ("D-Pad:", "Move X/Y position", TEXT_MAIN),
+                    ("LB/RB:", "Move Z (up/down)", TEXT_MAIN),
+                    ("", "", TEXT_MAIN),
+                    ("A Button:", "Enable controller", TEXT_MUTED),
+                    ("B Button:", "Stop movement", TEXT_MUTED),
+                    ("X Button:", "Center platform", TEXT_MUTED),
+                    ("Y Button:", "Run demo", TEXT_MUTED),
+                ]
+            else:
+                # ANALOG MODE controls
+                controls = [
+                    ("Left Stick:", "Move X/Y position", TEXT_MAIN),
+                    ("Right Stick UP:", "Tilt FORWARD (10°)", (100, 180, 255)),
+                    ("Right Stick DOWN:", "Tilt BACK (10°)", (100, 180, 255)),
+                    ("Right Stick LEFT:", "Tilt LEFT (10°)", (100, 180, 255)),
+                    ("Right Stick RIGHT:", "Tilt RIGHT (10°)", (100, 180, 255)),
+                    ("", "", TEXT_MAIN),
+                    ("A Button:", "Enable controller", TEXT_MUTED),
+                    ("B Button:", "Stop movement", TEXT_MUTED),
+                    ("X Button:", "Center platform", TEXT_MUTED),
+                    ("Y Button:", "Run demo", TEXT_MUTED),
+                ]
+
+            for label, description, color in controls:
+                if label:
+                    label_txt = font.render(label, True, color)
+                    screen.blit(label_txt, (info_x, info_y))
+
+                    if description:
+                        desc_txt = font_small.render(description, True, TEXT_MUTED)
+                        screen.blit(desc_txt, (info_x + 150, info_y + 2))
+
+                info_y += 30
+
+            # Mode indicator at bottom
+            mode_indicator_y = viz_panel.bottom - 50
+            mode_text = "MODE: D-PAD (discrete positions)" if joystick.dpad_mode else "MODE: ANALOG (continuous + directional tilt)"
+            mode_indicator = font.render(mode_text, True, (80, 100, 130))
+            screen.blit(mode_indicator, (info_x, mode_indicator_y))
 
         pygame.display.flip()
         clock.tick(30)
