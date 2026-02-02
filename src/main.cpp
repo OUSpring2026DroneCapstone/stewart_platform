@@ -41,6 +41,7 @@ bool centered = false;
 
 
 // Discrete positions for D-pad control
+#include "joystick_frames.h"
 float T_CENTER[3] = {0, 0, 2};     // Home position
 float T_FORWARD[3] = {0, 3.0, 2};   // D-pad UP
 float T_BACK[3]    = {0, -3.0, 2};  // D-pad DOWN
@@ -53,7 +54,7 @@ enum ControlMode : uint8_t {
   MODE_CONTROLLER
 };
 
-static ControlMode mode = MODE_IDLE;
+ControlMode mode = MODE_IDLE;
 
 enum PresetID : uint8_t {
   PRESET_NONE = 0,
@@ -63,8 +64,8 @@ enum PresetID : uint8_t {
 
 static PresetID active_preset = PRESET_NONE;
 
-static float T_cur[3] = {0, 0, 2};
-static Quaternion R_cur = Quaternion(1, 0, 0, 0);
+float T_cur[3] = {0, 0, 2};
+Quaternion R_cur = Quaternion(1, 0, 0, 0);
 
 inline int getAverageReading(uint8_t motor);
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
@@ -78,7 +79,8 @@ void setMotorsEnabled(bool en);
 void stopThisHoe();
 
 void checkTextCommands();     
-void handleJoystickFrames();  // parses "J ax ay az azi alt yaw\n"
+// Joystick frame handler in header
+#include "joystick_functions.h"
 
 // Motors start / stop
 void setMotorsEnabled(bool en) {
@@ -167,7 +169,9 @@ void loop() {
   checkTextCommands();
 
   // Always accept joystick frames, only moves if mode == MODE_CONTROLLER
-  handleJoystickFrames();
+  if (mode == MODE_CONTROLLER) {
+    handleJoystickFrames();
+  }
 
   // Scripted sequence
   if (mode == MODE_SCRIPT) {
@@ -292,85 +296,7 @@ void checkTextCommands() {
   }
 }
 
-// Joystick frames
-// Python sends: "J ax ay az azi alt yaw\n"
-void handleJoystickFrames() {
-  if (mode != MODE_CONTROLLER) return;
-  if (Serial.available() <= 0) return;
-  if (Serial.peek() != 'J') return;
-
-  Serial.read(); // consume 'J'
-  float ax  = Serial.parseFloat();
-  float ay  = Serial.parseFloat();
-  float az  = Serial.parseFloat();
-  float azi = Serial.parseFloat();   // enable flag
-  float alt = Serial.parseFloat();
-  float yaw = Serial.parseFloat();
-
-  // Require enable flag
-  if (azi < 0.5f) {
-    Serial.println("No input - motors off");
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-    return;
-  }
-
-  // Deadband
-  const float dead_t = 0.05f;
-
-  // Quantize to -1/0/+1
-  ax = (ax > dead_t) ? 1.0f : (ax < -dead_t ? -1.0f : 0.0f);
-  ay = (ay > dead_t) ? 1.0f : (ay < -dead_t ? -1.0f : 0.0f);
-
-  // Determine which position to go to
-  float* target_pos = nullptr;
-  String direction = "";
-
-  if (ax > 0.5f) {
-    target_pos = T_RIGHT;
-    direction = "RIGHT";
-  }
-  else if (ax < -0.5f) {
-    target_pos = T_LEFT;
-    direction = "LEFT";
-  }
-  else if (ay > 0.5f) {
-    target_pos = T_FORWARD;
-    direction = "FORWARD";
-  }
-  else if (ay < -0.5f) {
-    target_pos = T_BACK;
-    direction = "BACK";
-  }
-  else {
-    // No clear direction - stop motors
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-    return;
-  }
-
-  // Debug output
-  Serial.print("Moving to: "); Serial.print(direction);
-  Serial.print(" ("); Serial.print(target_pos[0]);
-  Serial.print(", "); Serial.print(target_pos[1]);
-  Serial.print(", "); Serial.print(target_pos[2]);
-  Serial.println(")");
-
-  // Lock rotation flat
-  Quaternion q_flat = Quaternion(1, 0, 0, 0);
-
-  // Move to the target positio
-  moveplat(1.0f, zero_length, T_cur, target_pos, q_flat, q_flat);
-
-  // Update current position tracker
-  T_cur[0] = target_pos[0];
-  T_cur[1] = target_pos[1];
-  T_cur[2] = target_pos[2];
-  R_cur = q_flat;
-
-  // Stop motors after reaching position
-  for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-  
-  Serial.println("Position reached - motors stopped");
-}
+// Joystick frames moved to include/joystick_functions.h
 
 
 // Math computations
