@@ -2,17 +2,22 @@
 
 #include <Arduino.h>
 #include "Quaternion.h"
+#include <math.h>
 #include "pin_layout.h"
 #include "platform.h"
 #include "joystick_frames.h"
+// Stop helper provided by main.cpp
+void stopMotors();
 
 // Forward declarations for globals defined in main.cpp
 extern float zero_length;            // base actuator length
 extern float T_cur[3];               // current position tracker
 extern Quaternion R_cur;             // current rotation tracker
+extern unsigned long g_lastJFrameMs; // last time a joystick frame was received
 
 // Forward declaration for motion function defined in main.cpp
 void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1);
+static const float Z_HOME = 2.0f;   // Lock platform height during joystick control
 
 // Joystick frame handler
 // Python sends: "J ax ay az azi alt yaw\n"
@@ -28,67 +33,26 @@ inline void handleJoystickFrames() {
   (void)Serial.parseFloat();         // alt (unused)
   (void)Serial.parseFloat();         // yaw (unused)
 
-  // Require enable flag
-  if (azi < 0.5f) {
-    Serial.println("No input - motors off");
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-    return;
-  }
+  if (azi < 0.5f) { stopMotors(); return; }
 
-  // Deadband
   const float dead_t = 0.05f;
+  float sx = (ax > dead_t) ? 1.0f : (ax < -dead_t ? -1.0f : 0.0f);
+  float sy = (ay > dead_t) ? 1.0f : (ay < -dead_t ? -1.0f : 0.0f);
 
-  // Quantize to -1/0/+1
-  ax = (ax > dead_t) ? 1.0f : (ax < -dead_t ? -1.0f : 0.0f);
-  ay = (ay > dead_t) ? 1.0f : (ay < -dead_t ? -1.0f : 0.0f);
+  if (sx == 0.0f && sy == 0.0f) { stopMotors(); return; }
 
-  // Determine which position to go to
-  float* target_pos = nullptr;
-  String direction = "";
+  float step = 0.25f;
+  float dur  = 0.12f;
 
-  if (ax > 0.5f) {
-    target_pos = T_RIGHT;
-    direction = "RIGHT";
-  }
-  else if (ax < -0.5f) {
-    target_pos = T_LEFT;
-    direction = "LEFT";
-  }
-  else if (ay > 0.5f) {
-    target_pos = T_FORWARD;
-    direction = "FORWARD";
-  }
-  else if (ay < -0.5f) {
-    target_pos = T_BACK;
-    direction = "BACK";
-  }
-  else {
-    // No clear direction - stop motors
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-    return;
-  }
+  float target[3] = { T_cur[0] + step * sx, T_cur[1] + step * sy, Z_HOME };
+  target[0] = constrain(target[0], -3.0f, 3.0f);
+  target[1] = constrain(target[1], -3.0f, 3.0f);
 
-  // Debug output
-  Serial.print("Moving to: "); Serial.print(direction);
-  Serial.print(" ("); Serial.print(target_pos[0]);
-  Serial.print(", "); Serial.print(target_pos[1]);
-  Serial.print(", "); Serial.print(target_pos[2]);
-  Serial.println(")");
+  Quaternion q_flat(1, 0, 0, 0);
+  moveplat(dur, zero_length, T_cur, target, q_flat, q_flat);
 
-  // Lock rotation flat
-  Quaternion q_flat = Quaternion(1, 0, 0, 0);
-
-  // Move to the target position
-  moveplat(1.0f, zero_length, T_cur, target_pos, q_flat, q_flat);
-
-  // Update current position tracker
-  T_cur[0] = target_pos[0];
-  T_cur[1] = target_pos[1];
-  T_cur[2] = target_pos[2];
+  T_cur[0] = target[0];
+  T_cur[1] = target[1];
+  T_cur[2] = Z_HOME;     // ensure height stays fixed
   R_cur = q_flat;
-
-  // Stop motors after reaching position
-  for (uint8_t m = 0; m < NUM_MOTORS; m++) analogWrite(PWM_PINS[m], 0);
-  
-  Serial.println("Position reached - motors stopped");
 }

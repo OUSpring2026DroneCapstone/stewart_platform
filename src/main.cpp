@@ -77,6 +77,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
 void setMotorsEnabled(bool en);
 void stopThisHoe();
+void stopMotors();
 
 void checkTextCommands();     
 // Joystick frame handler in header
@@ -90,6 +91,13 @@ void setMotorsEnabled(bool en) {
   #ifdef ENABLE_MOTORS_2
   digitalWrite(ENABLE_MOTORS_2, en ? LOW : HIGH);
   #endif
+}
+
+// Stop all motors by setting PWM to 0 (does not toggle enable pins)
+void stopMotors() {
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    analogWrite(PWM_PINS[m], 0);
+  }
 }
 
 void runPreset(PresetID p) {
@@ -204,7 +212,8 @@ inline void doCenter() {
 
   setMotorsEnabled(true);
 
-  moveplat(3.0f, zero_length, T0, T0, R0, R0);
+  // Faster center: reduce duration from 3.0s to 1.0s
+  moveplat(1.0f, zero_length, T0, T0, R0, R0);
 
   T_cur[0] = 0;
   T_cur[1] = 0;
