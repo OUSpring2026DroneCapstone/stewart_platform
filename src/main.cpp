@@ -38,6 +38,8 @@ float dur = 2.0f;
 
 bool stop_requested = false;
 bool centered = false;
+bool joystick_input_active = false;
+unsigned long g_lastJFrameMs = 0;
 
 
 // Discrete positions for D-pad control
@@ -79,7 +81,8 @@ void setMotorsEnabled(bool en);
 void stopThisHoe();
 void stopMotors();
 
-void checkTextCommands();     
+void checkTextCommands();
+void updateJoystickInputFlag();
 // Joystick frame handler in header
 #include "joystick_functions.h"
 
@@ -381,14 +384,25 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
   for (int step = 0; step <= steps; step++) {
 
     checkTextCommands();
-  
+
     if (stop_requested) {
       for (uint8_t m = 0; m < NUM_MOTORS; m++) {
         analogWrite(PWM_PINS[m], 0);
       }
       setMotorsEnabled(false);
-      stop_requested = false; 
+      stop_requested = false;
       return;
+    }
+
+    // If in controller mode, check for new joystick input and stop if button released
+    if (mode == MODE_CONTROLLER) {
+      updateJoystickInputFlag();
+      if (!joystick_input_active) {
+        for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+          analogWrite(PWM_PINS[m], 0);
+        }
+        return;
+      }
     }
 
     unsigned long start_time = millis();
