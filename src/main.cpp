@@ -70,6 +70,7 @@ inline int getAverageReading(uint8_t motor);
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
 inline void moveAll(MotorDirection dir);
 inline void calibrate();
+inline void doCenter();
 void lerp(const float pos0[3], const float pos1[3], float t, float T[3]);
 inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1);
 
@@ -193,7 +194,7 @@ void loop() {
   delay(2);
 }
 
-void doCenter() {
+inline void doCenter() {
   Serial.println("Centering...");
   stop_requested = false;
 
@@ -393,6 +394,7 @@ inline void moveAll(MotorDirection dir)
     analogWrite(PWM_PINS[motor], MAX_PWM);
   }
 }
+
 
 inline void calibrate()
 {

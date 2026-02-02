@@ -40,6 +40,12 @@ def main():
     if port:
         try:
             ser = serial.Serial(port, BAUD_RATE, timeout=0)
+            # Give the Arduino time to reset after opening serial on Windows
+            time.sleep(2.0)
+            try:
+                ser.reset_input_buffer()
+            except Exception:
+                pass
         except Exception as e:
             print(f"[Serial] Failed to open {port}: {e}")
             ser = None
@@ -116,16 +122,26 @@ def main():
         joystick.tick()
 
         # 🔴 NEW: listen for Arduino center completion
-        if ser and ser.in_waiting:
-            lines = ser.read(ser.in_waiting).decode(errors="replace").splitlines()
-            for line in lines:
-                print("[ARDUINO]", line)
+        if ser:
+            waiting = 0
+            try:
+                waiting = ser.in_waiting
+            except serial.SerialException:
+                # Can occur on Windows if the device is resetting or driver is busy
+                waiting = 0
+            except Exception:
+                waiting = 0
 
-                if waiting_for_center and "Centered. Motors disabled." in line:
-                    waiting_for_center = False
-                    if active_preset:
-                        send_command(f"start {active_preset}")
-                        menu = RUNNING
+            if waiting:
+                lines = ser.read(waiting).decode(errors="replace").splitlines()
+                for line in lines:
+                    print("[ARDUINO]", line)
+
+                    if waiting_for_center and "Centered. Motors disabled." in line:
+                        waiting_for_center = False
+                        if active_preset:
+                            send_command(f"start {active_preset}")
+                            menu = RUNNING
 
         # ---------------- draw ----------------
         screen.fill(BG_MAIN)
