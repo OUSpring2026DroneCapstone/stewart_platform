@@ -17,7 +17,7 @@ extern unsigned long g_lastJFrameMs; // last time a joystick frame was received
 extern bool joystick_input_active;   // tracks if joystick is currently providing input
 
 // Timeout for joystick input (if no frame received in this time, button is released)
-static const unsigned long JOYSTICK_TIMEOUT_MS = 100;
+static const unsigned long JOYSTICK_TIMEOUT_MS = 200;
 
 // Forward declaration for motion function defined in main.cpp
 void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1);
