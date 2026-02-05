@@ -34,6 +34,10 @@ def main():
     font = pygame.font.SysFont("Segoe UI", 16)
     font_small = pygame.font.SysFont("Segoe UI", 13)
 
+    MAX_LOG_LINES = 18
+    arduino_log = []
+
+
     # ---------------- serial (optional) ----------------
     ser = None
     port = sys.argv[1] if len(sys.argv) >= 2 else None
@@ -136,7 +140,17 @@ def main():
             if waiting:
                 lines = ser.read(waiting).decode(errors="replace").splitlines()
                 for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
                     print("[ARDUINO]", line)
+
+                    #if line.startswith("POS"):
+                    arduino_log.append(line)
+                    if len(arduino_log) > MAX_LOG_LINES:
+                        arduino_log.pop(0)
+
 
                     if waiting_for_center and "Centered. Motors disabled." in line:
                         waiting_for_center = False
@@ -152,7 +166,7 @@ def main():
 
         # ---- buttons by state ----
         if menu == MAIN:
-            buttons = make_buttons(["START", "CENTER", "STOP"])
+            buttons = make_buttons(["START", "CENTER", "CALIBRATE", "STOP"])
 
         elif menu == START_MENU:
             buttons = make_buttons(["CONTROLLER", "PRESETS", "BACK"])
@@ -183,6 +197,8 @@ def main():
                         menu = START_MENU
                     elif label == "CENTER":
                         send_command("center")
+                    elif label == "CALIBRATE":
+                        send_command("calibrate")
                     elif label == "STOP":
                         send_command("stop")
 
@@ -252,9 +268,24 @@ def main():
                 joystick.toggle_mode()
                 print(f"[Mode] Switched to {'D-PAD' if joystick.dpad_mode else 'ANALOG'}")
 
-        # ---- visualization panel ----
         pygame.draw.rect(screen, VIZ_BG, viz_panel, border_radius=14)
         pygame.draw.rect(screen, VIZ_BORDER, viz_panel, 2, border_radius=14)
+
+        # ---- Arduino live log (right side) ----
+        log_x = viz_panel.left + 30
+        log_y = viz_panel.top + 30
+        line_h = 18
+
+        title = font_title.render("ARDUINO LOG", True, (40, 50, 65))
+        screen.blit(title, (log_x, log_y))
+
+        log_y += 40
+
+        for line in arduino_log:
+            txt = font_small.render(line, True, (90, 110, 140))
+            screen.blit(txt, (log_x, log_y))
+            log_y += line_h
+
 
         # ---- control scheme display ----
         if joystick.available:
