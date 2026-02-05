@@ -40,6 +40,7 @@ bool stop_requested = false;
 bool centered = false;
 bool joystick_input_active = false;
 unsigned long g_lastJFrameMs = 0;
+bool enable_move_stats = false;
 
 
 // Discrete positions for D-pad control
@@ -158,19 +159,13 @@ void setup() {
   }
   zero_length = sqrt(zero_length);
 
-  // Calibrate
-  calibration_valid = true;
-  Serial.println("Calibrating");
-  calibrate();
-  Serial.println("Calibrating Done");
-
   // Rotations
   R0 = azi_alt_to_rot(0.0, 0.0);
   R1 = azi_alt_to_rot(0.0, 10.0);
   R2 = azi_alt_to_rot(90.0, 10.0);
   R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
 
-  Serial.println("Ready. Commands: center | controller | start | stop");
+  Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
 }
 
 // Loop
@@ -272,6 +267,12 @@ void checkTextCommands() {
           Serial.println("Controller mode ON (J frames drive platform). Type 'stop' to exit.");
         }
       }
+      else if (buf == "calibrate") {
+        calibration_valid = true;
+        Serial.println("Calibrating");
+        calibrate();
+        Serial.println("Calibrating Done");
+      }
       else if (buf.startsWith("start")) {
         //doCenter();
 
@@ -336,36 +337,109 @@ inline void moveAll(MotorDirection dir)
 
 inline void calibrate()
 {
-  moveAll(EXTEND);
-  Serial.println("Extending");
-  delay(RESET_DELAY);
-
+  // Extend to a configurable safe maximum instead of hard stop
+  setMotorsEnabled(true);
+  Serial.println("Extending to safe max");
   for (motor = 0; motor < NUM_MOTORS; ++motor) {
-    analogWrite(PWM_PINS[motor], 0);
-    end_readings[motor] = getAverageReading(motor);
-    calibration_valid = (abs(end_readings[motor] - END_POS[motor]) < OFF_THRESHOLD);
-    if (!calibration_valid) break;
+    digitalWrite(DIR_PINS[motor], EXTEND);
+    analogWrite(PWM_PINS[motor], MAX_PWM);
   }
 
-  moveAll(RETRACT);
-  Serial.println("Retracting");
-  delay(RESET_DELAY);
+  bool all_done = false;
+  unsigned long t0 = millis();
+  while (!all_done && (millis() - t0) < RESET_DELAY) {
+    all_done = true;
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+      // If this motor already stopped, skip
+      // Check current extension in inches using default calib anchors
+      int16_t r = getAverageReading(motor);
+      float ext_in = mapFloat(r, ZERO_POS[motor], END_POS[motor], 0.0f, SAFE_MAX_INCHES);
+      if (ext_in >= SAFE_MAX_INCHES) {
+        analogWrite(PWM_PINS[motor], 0);
+        end_readings[motor] = r; // record safe-max reading per actuator
+      } else {
+        all_done = false;
+      }
+    }
+    delay(5);
+  }
 
+  // Print reached extension per actuator at safe max
+  Serial.println("<CALIB_EXTEND> Reached extensions (in)");
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    float ext_in = mapFloat(end_readings[m], ZERO_POS[m], END_POS[m], 0.0f, SAFE_MAX_INCHES);
+    Serial.print("  M"); Serial.print(m + 1);
+    Serial.print(": "); Serial.println(ext_in, 3);
+  }
+
+  // Basic validation: ensure each actuator reached near safe max
+  calibration_valid = true;
+  for (motor = 0; motor < NUM_MOTORS; ++motor) {
+    float ext_in = mapFloat(end_readings[motor], ZERO_POS[motor], END_POS[motor], 0.0f, SAFE_MAX_INCHES);
+    if (ext_in < (SAFE_MAX_INCHES - 0.25f)) { // 0.25" tolerance
+      calibration_valid = false;
+      break;
+    }
+  }
+
+  // Retract back toward baseline to capture zero_readings
+  Serial.println("Retracting toward baseline");
+  for (motor = 0; motor < NUM_MOTORS; ++motor) {
+    digitalWrite(DIR_PINS[motor], RETRACT);
+    analogWrite(PWM_PINS[motor], MAX_PWM);
+  }
+
+  t0 = millis();
+  while ((millis() - t0) < RESET_DELAY) {
+    bool all_zero = true;
+    for (motor = 0; motor < NUM_MOTORS; ++motor) {
+      int16_t r = getAverageReading(motor);
+      float ext_in = mapFloat(r, ZERO_POS[motor], END_POS[motor], 0.0f, SAFE_MAX_INCHES);
+      if (ext_in <= 0.1f) { // close to baseline
+        analogWrite(PWM_PINS[motor], 0);
+        zero_readings[motor] = r;
+      } else {
+        all_zero = false;
+      }
+    }
+    if (all_zero) break;
+    delay(5);
+  }
+
+  // Validate baseline
   if (calibration_valid) {
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
-      analogWrite(PWM_PINS[motor], 0);
-      zero_readings[motor] = getAverageReading(motor);
       calibration_valid = (abs(zero_readings[motor] - ZERO_POS[motor]) < OFF_THRESHOLD);
       if (!calibration_valid) break;
     }
   }
 
+  // Apply new anchors if valid: safe-max and baseline
   if (calibration_valid) {
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
       END_POS[motor]  = end_readings[motor];
       ZERO_POS[motor] = zero_readings[motor];
     }
+
+    // Optional post-calibration motion: sweep left and right
+    Serial.println("Post-calibration: sweeping LEFT and RIGHT");
+    stop_requested = false;
+    setMotorsEnabled(true);
+    enable_move_stats = true;
+    // Use doubled lateral targets for sweep only
+    float T_RIGHT_SWEEP[3] = { T_RIGHT[0] * 2.0f, T_RIGHT[1], T_RIGHT[2] };
+    float T_LEFT_SWEEP[3]  = { T_LEFT[0]  * 2.0f, T_LEFT[1],  T_LEFT[2]  };
+    moveplat(2.0f, zero_length, T_CENTER, T_RIGHT_SWEEP, R0, R0);
+    moveplat(2.0f, zero_length, T_RIGHT_SWEEP, T_LEFT_SWEEP, R0, R0);
+    moveplat(2.0f, zero_length, T_LEFT_SWEEP, T_CENTER, R0, R0);
+    enable_move_stats = false;
   }
+
+  // Stop all motion and disable motors for safety
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    analogWrite(PWM_PINS[m], 0);
+  }
+  setMotorsEnabled(false);
 }
 
 void lerp(const float pos0[3], const float pos1[3], float t, float T[3]) {
@@ -380,6 +454,15 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
   if (steps < 1) steps = 1;
 
   float Kp = 0.25f;
+
+  float start_ext[NUM_MOTORS];
+  float end_ext[NUM_MOTORS];
+  float max_ext[NUM_MOTORS];
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    start_ext[m] = 0.0f;
+    end_ext[m]   = 0.0f;
+    max_ext[m]   = -1e9f;
+  }
 
   for (int step = 0; step <= steps; step++) {
 
@@ -442,8 +525,13 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       length_t    = sqrt(length_t);
       length_next = sqrt(length_next);
 
+      // Clamp desired lengths to safe stroke
+      float max_len = length_min + SAFE_MAX_INCHES;
+      if (length_t > max_len) length_t = max_len;
+      if (length_next > max_len) length_next = max_len;
+
       float reading_now = getAverageReading(motor);
-      float length_now = mapFloat(reading_now, ZERO_POS[motor], END_POS[motor], 0, 8) + length_min;
+      float length_now = mapFloat(reading_now, ZERO_POS[motor], END_POS[motor], 0, SAFE_MAX_INCHES) + length_min;
       float error = length_t - length_now;
 
       float vel = (length_next - length_t + error * Kp) * steps / duration;
@@ -455,6 +543,12 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
       if (pwm_speed < 10) pwm_speed = 0; // lowered deadzone for debugging
       pwm_local[motor] = (vel >= 0.0f) ? pwm_speed : -pwm_speed;
+
+      // Stats: track start, end, and max extension (inches)
+      float ext_in = length_now - length_min;
+      if (step == 0) start_ext[motor] = ext_in;
+      if (ext_in > max_ext[motor]) max_ext[motor] = ext_in;
+      if (step == steps) end_ext[motor] = ext_in;
     }
 
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
@@ -469,5 +563,16 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
     unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
     while ((millis() - start_time) < target_delay) { }
+  }
+
+  // Print per-actuator move stats if enabled
+  if (enable_move_stats) {
+    Serial.println("<MOVE_STATS> Actuator extensions (in)");
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+      Serial.print("  M"); Serial.print(m + 1);
+      Serial.print(": start="); Serial.print(start_ext[m], 3);
+      Serial.print(", end=");   Serial.print(end_ext[m], 3);
+      Serial.print(", max=");   Serial.println(max_ext[m], 3);
+    }
   }
 }

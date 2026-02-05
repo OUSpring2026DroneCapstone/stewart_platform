@@ -19,6 +19,12 @@
 int16_t ZERO_POS[NUM_MOTORS]  = { 45, 45, 45, 45, 45, 45 };
 int16_t END_POS[NUM_MOTORS]   = { 875, 875, 875, 875, 875, 875 };
 
+// Stroke and calibration limits (inches)
+// Note: mapping currently treats the full range as 8". Use SAFE_MAX_INCHES
+// to calibrate against a smaller, safer maximum without hard-stopping actuators.
+#define STROKE_INCHES 8.0f
+#define SAFE_MAX_INCHES 8.0f  // set your preferred safe max here
+
 // Pin group arrays; each value corresponding to the actuator (see "pin_layout.h" for specific ins)
 const uint8_t DIR_PINS[NUM_MOTORS] = { DIR_PIN_1, DIR_PIN_2, DIR_PIN_3, DIR_PIN_4, DIR_PIN_5, DIR_PIN_6 };
 const uint8_t PWM_PINS[NUM_MOTORS] = { PWM_PIN_1, PWM_PIN_2, PWM_PIN_3, PWM_PIN_4, PWM_PIN_5, PWM_PIN_6 };
