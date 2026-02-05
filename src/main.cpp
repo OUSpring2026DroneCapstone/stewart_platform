@@ -118,6 +118,12 @@ void runPreset(PresetID p) {
 
     case PRESET_FIGURE8:
       // placeholder for later
+      moveplat(dur, zero_length, T0, T1, R0, R0);
+      moveplat(dur, zero_length, T1, TX, R0, R0);
+      moveplat(dur, zero_length, TX, T1, R0, R0);
+      moveplat(dur, zero_length, T1, TY, R0, R0);
+      moveplat(dur, zero_length, TY, T1, R0, R0);
+      moveplat(5.0f, zero_length, T1, TZ, R0, R0);
       break;
 
     default:
@@ -185,6 +191,8 @@ void loop() {
     if (!centered) {
       doCenter();
     }
+
+    setMotorsEnabled(true);
 
     Serial.println("Running preset");
     runPreset(active_preset);
