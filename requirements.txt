@@ -1,2 +1,3 @@
 pygame==2.6.1
 pyserial==3.5
+dearpygui>=1.11

@@ -62,7 +62,9 @@ ControlMode mode = MODE_IDLE;
 enum PresetID : uint8_t {
   PRESET_NONE = 0,
   PRESET_DEMO,
-  PRESET_FIGURE8
+  PRESET_FIGURE8,
+  PRESET_ORBIT,
+  PRESET_WAVE
 };
 
 static PresetID active_preset = PRESET_NONE;
@@ -107,6 +109,10 @@ void stopMotors() {
 void runPreset(PresetID p) {
   switch (p) {
 
+    float Z_LOW;
+    float Z_MID;
+    float Z_HIGH;
+
     case PRESET_DEMO:
       moveplat(dur, zero_length, T0, T1, R0, R0);
       moveplat(dur, zero_length, T1, TX, R0, R0);
@@ -117,14 +123,88 @@ void runPreset(PresetID p) {
       break;
 
     case PRESET_FIGURE8:
+    {
       // placeholder for later
-      moveplat(dur, zero_length, T0, T1, R0, R0);
-      moveplat(dur, zero_length, T1, TX, R0, R0);
-      moveplat(dur, zero_length, TX, T1, R0, R0);
-      moveplat(dur, zero_length, T1, TY, R0, R0);
-      moveplat(dur, zero_length, TY, T1, R0, R0);
-      moveplat(5.0f, zero_length, T1, TZ, R0, R0);
+      Z_LOW  = 1.8f;   // lower at crossover
+      Z_HIGH = 2.4f;   // higher at outer lobes
+    
+      float F8_1[3] = {  2.5f,  0.0f, Z_HIGH };
+      float F8_2[3] = {  0.0f,  2.5f, Z_LOW  };
+      float F8_3[3] = { -2.5f,  0.0f, Z_HIGH };
+      float F8_4[3] = {  0.0f, -2.5f, Z_LOW  };
+      float F8_5[3] = {  2.5f,  0.0f, Z_HIGH };
+    
+      moveplat(dur, zero_length, T_CENTER, F8_1, R0, R0);
+      moveplat(dur, zero_length, F8_1, F8_2, R0, R0);
+      moveplat(dur, zero_length, F8_2, F8_3, R0, R0);
+      moveplat(dur, zero_length, F8_3, F8_4, R0, R0);
+      moveplat(dur, zero_length, F8_4, F8_5, R0, R0);
+      moveplat(dur, zero_length, F8_5, T_CENTER, R0, R0);
       break;
+    }
+
+    case PRESET_ORBIT:
+    {
+      
+      Z_LOW  = 1.8f;
+      Z_MID  = 2.2f;
+      Z_HIGH = 2.6f;
+
+      float P1[3] = {  2.5f,  0.0f, Z_LOW  };
+      float P2[3] = {  2.5f,  2.5f, Z_MID  };
+      float P3[3] = {  0.0f,  2.5f, Z_HIGH };
+      float P4[3] = { -2.5f,  2.5f, Z_MID  };
+      float P5[3] = { -2.5f,  0.0f, Z_LOW  };
+      float P6[3] = { -2.5f, -2.5f, Z_MID  };
+      float P7[3] = {  0.0f, -2.5f, Z_HIGH };
+      float P8[3] = {  2.5f, -2.5f, Z_MID  };
+      float P9[3] = {  2.5f,  0.0f, Z_LOW  };
+
+      moveplat(dur, zero_length, T_CENTER, P1, R0, R0);
+      moveplat(dur, zero_length, P1, P2, R0, R0);
+      moveplat(dur, zero_length, P2, P3, R0, R0);
+      moveplat(dur, zero_length, P3, P4, R0, R0);
+      moveplat(dur, zero_length, P4, P5, R0, R0);
+      moveplat(dur, zero_length, P5, P6, R0, R0);
+      moveplat(dur, zero_length, P6, P7, R0, R0);
+      moveplat(dur, zero_length, P7, P8, R0, R0);
+      moveplat(dur, zero_length, P8, P9, R0, R0);
+      moveplat(dur, zero_length, P9, T_CENTER, R0, R0);
+
+      break;
+    }
+      
+    case PRESET_WAVE:
+    {
+      
+        Z_LOW  = 1.7f;
+        Z_MID  = 2.0f;
+        Z_HIGH = 2.5f;
+      
+        float P1[3] = {  2.5f,  0.0f, Z_HIGH };
+        float P2[3] = { -2.5f,  0.0f, Z_LOW  };
+        float P3[3] = {  2.5f,  0.0f, Z_HIGH };
+        float P4[3] = {  0.0f,  0.0f, Z_MID  };
+      
+        float P5[3] = {  0.0f,  2.5f, Z_HIGH };
+        float P6[3] = {  0.0f, -2.5f, Z_LOW  };
+        float P7[3] = {  0.0f,  2.5f, Z_HIGH };
+        float P8[3] = {  0.0f,  0.0f, Z_MID  };
+      
+        moveplat(dur, zero_length, T_CENTER, P1, R0, R0);
+        moveplat(dur, zero_length, P1, P2, R0, R0);
+        moveplat(dur, zero_length, P2, P3, R0, R0);
+        moveplat(dur, zero_length, P3, P4, R0, R0);
+      
+        moveplat(dur, zero_length, P4, P5, R0, R0);
+        moveplat(dur, zero_length, P5, P6, R0, R0);
+        moveplat(dur, zero_length, P6, P7, R0, R0);
+        moveplat(dur, zero_length, P7, P8, R0, R0);
+      
+        moveplat(dur, zero_length, P8, T_CENTER, R0, R0);
+
+        break;
+    }
 
     default:
       Serial.println("No preset selected");
@@ -219,7 +299,7 @@ inline void doCenter() {
   setMotorsEnabled(true);
 
   // Faster center: reduce duration from 3.0s to 1.0s
-  moveplat(1.0f, zero_length, T0, T0, R0, R0);
+  moveplat(2.0f, zero_length, T0, T0, R0, R0);
 
   T_cur[0] = 0;
   T_cur[1] = 0;
@@ -292,6 +372,12 @@ void checkTextCommands() {
         }
         else if (arg == "figure8") {
           active_preset = PRESET_FIGURE8;
+        }
+        else if (arg == "orbit") {
+          active_preset = PRESET_ORBIT;
+        }
+        else if (arg == "wave") {
+          active_preset = PRESET_WAVE;
         }
         else {
           Serial.println("Unknown preset");

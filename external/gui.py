@@ -1,51 +1,42 @@
-# gui.py
+"""
+Dear PyGui-based GUI (hybrid):
+ - Uses Dear PyGui for UI
+ - Keeps pygame joystick backend and serial logic
+ - Preserves original behavior and commands
+"""
+
 import sys
+import time
 import serial
 import pygame
-import time
-
 from joystick import JoystickBackend
+import dearpygui.dearpygui as dpg
 
 BAUD_RATE = 115200
 
-# ---------------- colors ----------------
-BG_MAIN = (16, 20, 28)
-BG_LEFT = (24, 30, 42)
-BG_CARD = (34, 42, 58)
-
-BTN = (60, 78, 105)
-BTN_HOVER = (82, 104, 135)
-BTN_BORDER = (120, 135, 160)
-
+# Theme colors (modern dark)
+BG_MAIN = (22, 20, 33)
+BG_LEFT = (32, 29, 46)
+BG_CARD = (42, 38, 61)
+ACCENT = (0, 215, 170)
 TEXT_MAIN = (235, 240, 248)
-TEXT_MUTED = (170, 180, 195)
+TEXT_MUTED = (168, 176, 194)
 
-VIZ_BG = (245, 246, 248)
-VIZ_BORDER = (190, 195, 205)
+# Arduino log cap
+MAX_LOG_LINES = 18
 
 
 def main():
+    # Init pygame for joystick backend
+
     pygame.init()
-    screen = pygame.display.set_mode((1200, 650))
-    pygame.display.set_caption("Stewart Platform Control")
-    clock = pygame.time.Clock()
-
-    font_title = pygame.font.SysFont("Segoe UI", 22, bold=True)
-    font = pygame.font.SysFont("Segoe UI", 16)
-    font_small = pygame.font.SysFont("Segoe UI", 13)
-
-    MAX_LOG_LINES = 18
-    arduino_log = []
-
 
     # ---------------- serial (optional) ----------------
     ser = None
     port = sys.argv[1] if len(sys.argv) >= 2 else None
-
     if port:
         try:
             ser = serial.Serial(port, BAUD_RATE, timeout=0)
-            # Give the Arduino time to reset after opening serial on Windows
             time.sleep(2.0)
             try:
                 ser.reset_input_buffer()
@@ -55,16 +46,14 @@ def main():
             print(f"[Serial] Failed to open {port}: {e}")
             ser = None
 
-    # ---------------- joystick backend ----------------
+    # ---------------- backend ----------------
     controller_mode = False
 
     def send_command(cmd: str):
         nonlocal controller_mode
-
         if ser:
             ser.write((cmd + "\n").encode())
             print(f">>> SENT: {cmd}")
-
         if cmd == "controller":
             controller_mode = True
             joystick.enable_controller()
@@ -77,277 +66,262 @@ def main():
 
     joystick = JoystickBackend(ser, on_command=send_command)
 
-    # ---------------- UI STATES ----------------
-    MAIN = "main"
-    START_MENU = "start"
-    PRESETS = "presets"
-    RUNNING = "running"
-
+    # ---------------- state ----------------
+    MAIN, START_MENU, PRESETS, RUNNING = "main", "start", "presets", "running"
     menu = MAIN
     active_preset = None
-
-    # 🔴 NEW: wait-for-center flag
     waiting_for_center = False
 
-    # ---------------- layout ----------------
-    LEFT_W = 380
-    HEIGHT = 650
+    # ---------------- Dear PyGui setup ----------------
+    dpg.create_context()
+    dpg.create_viewport(title="Stewart Platform Control", width=1200, height=650)
+    dpg.setup_dearpygui()
+    arduino_log: list[str] = []
+    dpg.show_viewport()
 
-    left_panel = pygame.Rect(0, 0, LEFT_W, HEIGHT)
-    viz_panel = pygame.Rect(LEFT_W + 40, 80, 520, HEIGHT - 160)
+    # Simple theme
+    with dpg.theme() as app_theme:
+        with dpg.theme_component(dpg.mvAll):
+            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, BG_MAIN)
+            dpg.add_theme_color(dpg.mvThemeCol_Text, TEXT_MAIN)
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 8)
+            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 10, 10)
+    dpg.bind_theme(app_theme)
 
-    def make_buttons(labels):
-        btns = []
-        btn_w, btn_h = 260, 46
-        start_y = 260
-        for i, label in enumerate(labels):
-            btns.append(
-                (label,
-                 pygame.Rect(60, start_y + i * (btn_h + 18), btn_w, btn_h))
+    # Root windows
+    with dpg.window(no_title_bar=True, no_resize=True, no_move=True, pos=(0, 0), width=1200, height=60):
+        dpg.add_text("Stewart Platform", color=TEXT_MAIN)
+        dpg.add_text(" ")
+
+    with dpg.window(tag="left_panel", no_title_bar=True, pos=(0, 60), width=380, height=590):
+        dpg.add_text(tag="menu_title", default_value="MAIN", color=TEXT_MUTED)
+        dpg.add_separator()
+
+    with dpg.window(tag="viz_panel", no_title_bar=True, pos=(380 + 40, 100), width=520, height=470):
+        dpg.add_text("ARDUINO LOG", color=(140, 150, 200))
+        dpg.add_separator()
+        dpg.add_text(tag="arduino_log_text", default_value="", color=(90, 110, 140))
+        dpg.add_spacer(height=12)
+        dpg.add_text("CONTROLS", color=(140, 150, 200))
+        dpg.add_separator()
+        dpg.add_text(tag="controls_text", default_value="", color=TEXT_MUTED)
+        dpg.add_spacer(height=8)
+        dpg.add_text(tag="running_label", default_value="", color=TEXT_MUTED)
+        dpg.add_text(tag="mode_label", default_value="", color=(138, 150, 190))
+
+    # Popup helper
+    def show_popup(messages):
+        if isinstance(messages, str):
+            messages = [messages]
+        # Delete existing popup if present
+        if dpg.does_item_exist("popup"):
+            dpg.delete_item("popup")
+        with dpg.window(modal=True, no_title_bar=True, tag="popup", pos=(340, 220), width=520, height=220):
+            dpg.add_text("Connection Required", color=TEXT_MAIN)
+            dpg.add_separator()
+            for msg in messages:
+                dpg.add_text(msg, color=TEXT_MAIN)
+            dpg.add_spacer(height=8)
+            dpg.add_button(label="OK", width=120, callback=lambda *args, **kwargs: dpg.delete_item("popup"))
+
+    def connection_error_for(action_label):
+        missing = []
+        serial_required = {"CENTER", "STOP", "DEMO", "FIGURE 8", "RESTART"}
+        controller_actions = {"CONTROLLER"}
+        if action_label in serial_required or action_label in controller_actions:
+            if not ser:
+                missing.append("Serial port not connected")
+        if action_label in controller_actions:
+            if not joystick.available:
+                missing.append("Joystick not connected")
+        return missing or None
+
+    # Build left panel buttons depending on menu
+    def rebuild_buttons():
+        if dpg.does_item_exist("buttons_container"):
+            dpg.delete_item("buttons_container")
+        # Use a simple group as container for reliable rebuilds
+        with dpg.group(tag="buttons_container", parent="left_panel"):
+            labels = []
+            if menu == MAIN:
+                labels = ["START", "CENTER", "CALIBRATE", "STOP"]
+                dpg.configure_item("menu_title", default_value="MAIN")
+            elif menu == START_MENU:
+                labels = ["CONTROLLER", "PRESETS", "BACK"]
+                dpg.configure_item("menu_title", default_value="START MENU")
+            elif menu == PRESETS:
+                labels = ["DEMO", "FIGURE 8", "BACK"]
+                dpg.configure_item("menu_title", default_value="PRESETS")
+            elif menu == RUNNING:
+                labels = ["RESTART", "STOP"]
+                dpg.configure_item("menu_title", default_value="RUNNING")
+
+            for lab in labels:
+                dpg.add_button(label=lab, height=42, width=260,
+                               callback=on_button_callback, user_data=lab)
+                dpg.add_spacer(height=12)
+
+            if joystick.available:
+                dpg.add_separator()
+                dpg.add_text("JOYSTICK MODE", color=TEXT_MUTED)
+                dpg.add_button(label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"), height=36, width=220,
+                               callback=toggle_mode, tag="mode_toggle")
+
+    def toggle_mode(sender=None, app_data=None, user_data=None):
+        joystick.toggle_mode()
+        dpg.configure_item("mode_toggle", label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"))
+        print(f"[Mode] Switched to {'D-PAD' if joystick.dpad_mode else 'ANALOG'}")
+
+    def on_button_callback(sender, app_data, user_data):
+        # Route Dear PyGui button callbacks to our label-based handler
+        on_button(user_data)
+
+    def on_button(label):
+        nonlocal menu, waiting_for_center, active_preset
+        if label == "START" and menu == MAIN:
+            menu = START_MENU
+            rebuild_buttons()
+            return
+
+        # Show connection warnings but DO NOT block actions
+        errs = connection_error_for(label)
+        if errs:
+            show_popup(errs)
+
+        if menu == MAIN:
+            if label == "CENTER":
+                send_command("center")
+            elif label == "STOP":
+                send_command("stop")
+
+        elif menu == START_MENU:
+            if label == "CONTROLLER":
+                send_command("controller")
+                menu = MAIN
+                rebuild_buttons()
+            elif label == "PRESETS":
+                menu = PRESETS
+                rebuild_buttons()
+            elif label == "BACK":
+                menu = MAIN
+                rebuild_buttons()
+
+        elif menu == PRESETS:
+            if label == "DEMO":
+                active_preset = "demo"
+                send_command("center")
+                waiting_for_center = True
+                menu = RUNNING
+                dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
+                rebuild_buttons()
+            elif label == "FIGURE 8":
+                active_preset = "figure8"
+                send_command("center")
+                waiting_for_center = True
+                menu = RUNNING
+                dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
+                rebuild_buttons()
+            elif label == "BACK":
+                menu = START_MENU
+                rebuild_buttons()
+
+        elif menu == RUNNING:
+            if label == "RESTART":
+                send_command("center")
+                waiting_for_center = True
+            elif label == "STOP":
+                send_command("stop")
+                waiting_for_center = False
+                menu = MAIN
+                rebuild_buttons()
+
+    rebuild_buttons()
+
+    def build_controls_text():
+        if not joystick.available:
+            return (
+                "Connect a joystick to enable controller shortcuts.\n"
+                "A: Enable controller\nB: Stop\nX: Center\nY: Run demo"
             )
-        return btns
+        if joystick.dpad_mode:
+            lines = [
+                "D-Pad: Move X/Y position",
+                "LB/RB: Move Z (up/down)",
+                "",
+                "A: Enable controller",
+                "B: Stop movement",
+                "X: Center platform",
+                "Y: Run demo",
+            ]
+        else:
+            lines = [
+                "Left Stick: Move X/Y position",
+                "Right Stick UP: Tilt FORWARD (10°)",
+                "Right Stick DOWN: Tilt BACK (10°)",
+                "Right Stick LEFT: Tilt LEFT (10°)",
+                "Right Stick RIGHT: Tilt RIGHT (10°)",
+                "",
+                "A: Enable controller",
+                "B: Stop movement",
+                "X: Center platform",
+                "Y: Run demo",
+            ]
+        return "\n".join(lines)
 
-    mouse_was_down = False
-
-    # ---------------- main loop ----------------
-    running = True
-    while running:
-        mouse_pos = pygame.mouse.get_pos()
-        mouse_down = pygame.mouse.get_pressed()[0]
-        clicked = mouse_down and not mouse_was_down
-        mouse_was_down = mouse_down
-
+    # Main render loop with backend processing
+    clock = pygame.time.Clock()
+    while dpg.is_dearpygui_running():
+        # Process joystick events and ticking
         events = pygame.event.get()
         joystick.handle_events(events)
-
-        for event in events:
-            if event.type == pygame.QUIT:
-                running = False
-
         joystick.tick()
 
-        # 🔴 NEW: listen for Arduino center completion
+        # Serial feedback
         if ser:
-            waiting = 0
             try:
                 waiting = ser.in_waiting
-            except serial.SerialException:
-                # Can occur on Windows if the device is resetting or driver is busy
-                waiting = 0
             except Exception:
                 waiting = 0
-
             if waiting:
                 lines = ser.read(waiting).decode(errors="replace").splitlines()
                 for line in lines:
                     line = line.strip()
                     if not line:
                         continue
-
                     print("[ARDUINO]", line)
-
-                    #if line.startswith("POS"):
                     arduino_log.append(line)
                     if len(arduino_log) > MAX_LOG_LINES:
                         arduino_log.pop(0)
-
-
                     if waiting_for_center and "Centered. Motors disabled." in line:
                         waiting_for_center = False
                         if active_preset:
                             send_command(f"start {active_preset}")
                             menu = RUNNING
+                            dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
 
-        # ---------------- draw ----------------
-        screen.fill(BG_MAIN)
-        pygame.draw.rect(screen, BG_LEFT, left_panel)
-
-        screen.blit(font_title.render("Stewart Platform", True, TEXT_MAIN), (40, 32))
-
-        # ---- buttons by state ----
-        if menu == MAIN:
-            buttons = make_buttons(["START", "CENTER", "CALIBRATE", "STOP"])
-
-        elif menu == START_MENU:
-            buttons = make_buttons(["CONTROLLER", "PRESETS", "BACK"])
-
-        elif menu == PRESETS:
-            buttons = make_buttons(["DEMO", "FIGURE 8", "BACK"])
-
-        elif menu == RUNNING:
-            buttons = make_buttons(["RESTART", "STOP"])
-
-        for label, rect in buttons:
-            hover = rect.collidepoint(mouse_pos)
-            color = BTN_HOVER if hover else BTN
-
-            pygame.draw.rect(screen, color, rect, border_radius=10)
-            pygame.draw.rect(screen, BTN_BORDER, rect, 2, border_radius=10)
-
-            txt = font.render(label, True, TEXT_MAIN)
-            screen.blit(
-                txt,
-                (rect.centerx - txt.get_width() // 2,
-                 rect.centery - txt.get_height() // 2)
-            )
-
-            if clicked and hover:
-                if menu == MAIN:
-                    if label == "START":
-                        menu = START_MENU
-                    elif label == "CENTER":
-                        send_command("center")
-                    elif label == "CALIBRATE":
-                        send_command("calibrate")
-                    elif label == "STOP":
-                        send_command("stop")
-
-                elif menu == START_MENU:
-                    if label == "CONTROLLER":
-                        send_command("controller")
-                        menu = MAIN
-                    elif label == "PRESETS":
-                        menu = PRESETS
-                    elif label == "BACK":
-                        menu = MAIN
-
-                elif menu == PRESETS:
-                    if label == "DEMO":
-                        active_preset = "demo"
-                        send_command("center")
-                        waiting_for_center = True
-                        menu = RUNNING
-                    elif label == "FIGURE 8":
-                        active_preset = "figure8"
-                        send_command("center")
-                        waiting_for_center = True
-                        menu = RUNNING
-                    elif label == "BACK":
-                        menu = START_MENU
-
-                elif menu == RUNNING:
-                    if label == "STOP":
-                        send_command("stop")
-                        waiting_for_center = False
-                        menu = MAIN
-                    elif label == "RESTART":
-                        send_command("center")
-                        waiting_for_center = True
-
-        # ---- running label ----
+        # Update labels
         if menu == RUNNING and active_preset:
-            tag = font.render(
-                f"RUNNING: {active_preset.upper()}",
-                True,
-                TEXT_MUTED
-            )
-            screen.blit(tag, (40, 210))
+            dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
+        else:
+            dpg.configure_item("running_label", default_value="")
 
-        # ---- joystick mode toggle (bottom of left panel) ----
-        if joystick.available:
-            mode_y = HEIGHT - 180
-            mode_label = font.render("JOYSTICK MODE", True, TEXT_MUTED)
-            screen.blit(mode_label, (40, mode_y))
+        mode_text = "MODE: D-PAD (discrete positions)" if joystick.dpad_mode else "MODE: ANALOG (continuous + directional tilt)"
+        dpg.configure_item("controls_text", default_value=build_controls_text())
+        dpg.configure_item("arduino_log_text", default_value="\n".join(arduino_log))
+        dpg.configure_item("mode_label", default_value=mode_text)
 
-            mode_toggle_rect = pygame.Rect(60, mode_y + 35, 260, 46)
-            mode_hover = mode_toggle_rect.collidepoint(mouse_pos)
-            mode_color = BTN_HOVER if mode_hover else BTN
-
-            pygame.draw.rect(screen, mode_color, mode_toggle_rect, border_radius=10)
-            pygame.draw.rect(screen, BTN_BORDER, mode_toggle_rect, 2, border_radius=10)
-
-            mode_text = "D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"
-            mode_txt = font.render(mode_text, True, TEXT_MAIN)
-            screen.blit(
-                mode_txt,
-                (mode_toggle_rect.centerx - mode_txt.get_width() // 2,
-                 mode_toggle_rect.centery - mode_txt.get_height() // 2)
-            )
-
-            if clicked and mode_hover:
-                joystick.toggle_mode()
-                print(f"[Mode] Switched to {'D-PAD' if joystick.dpad_mode else 'ANALOG'}")
-
-        pygame.draw.rect(screen, VIZ_BG, viz_panel, border_radius=14)
-        pygame.draw.rect(screen, VIZ_BORDER, viz_panel, 2, border_radius=14)
-
-        # ---- Arduino live log (right side) ----
-        log_x = viz_panel.left + 30
-        log_y = viz_panel.top + 30
-        line_h = 18
-
-        title = font_title.render("ARDUINO LOG", True, (40, 50, 65))
-        screen.blit(title, (log_x, log_y))
-
-        log_y += 40
-
-        for line in arduino_log:
-            txt = font_small.render(line, True, (90, 110, 140))
-            screen.blit(txt, (log_x, log_y))
-            log_y += line_h
-
-
-        # ---- control scheme display ----
-        if joystick.available:
-            info_y = viz_panel.top + 30
-            info_x = viz_panel.left + 30
-
-            # Title
-            controls_title = font_title.render("CONTROLS", True, (40, 50, 65))
-            screen.blit(controls_title, (info_x, info_y))
-
-            info_y += 50
-
-            if joystick.dpad_mode:
-                # D-PAD MODE controls
-                controls = [
-                    ("D-Pad:", "Move X/Y position", TEXT_MAIN),
-                    ("LB/RB:", "Move Z (up/down)", TEXT_MAIN),
-                    ("", "", TEXT_MAIN),
-                    ("A Button:", "Enable controller", TEXT_MUTED),
-                    ("B Button:", "Stop movement", TEXT_MUTED),
-                    ("X Button:", "Center platform", TEXT_MUTED),
-                    ("Y Button:", "Run demo", TEXT_MUTED),
-                ]
-            else:
-                # ANALOG MODE controls
-                controls = [
-                    ("Left Stick:", "Move X/Y position", TEXT_MAIN),
-                    ("Right Stick UP:", "Tilt FORWARD (10°)", (100, 180, 255)),
-                    ("Right Stick DOWN:", "Tilt BACK (10°)", (100, 180, 255)),
-                    ("Right Stick LEFT:", "Tilt LEFT (10°)", (100, 180, 255)),
-                    ("Right Stick RIGHT:", "Tilt RIGHT (10°)", (100, 180, 255)),
-                    ("", "", TEXT_MAIN),
-                    ("A Button:", "Enable controller", TEXT_MUTED),
-                    ("B Button:", "Stop movement", TEXT_MUTED),
-                    ("X Button:", "Center platform", TEXT_MUTED),
-                    ("Y Button:", "Run demo", TEXT_MUTED),
-                ]
-
-            for label, description, color in controls:
-                if label:
-                    label_txt = font.render(label, True, color)
-                    screen.blit(label_txt, (info_x, info_y))
-
-                    if description:
-                        desc_txt = font_small.render(description, True, TEXT_MUTED)
-                        screen.blit(desc_txt, (info_x + 150, info_y + 2))
-
-                info_y += 30
-
-            # Mode indicator at bottom
-            mode_indicator_y = viz_panel.bottom - 50
-            mode_text = "MODE: D-PAD (discrete positions)" if joystick.dpad_mode else "MODE: ANALOG (continuous + directional tilt)"
-            mode_indicator = font.render(mode_text, True, (80, 100, 130))
-            screen.blit(mode_indicator, (info_x, mode_indicator_y))
-
-        pygame.display.flip()
+        dpg.render_dearpygui_frame()
         clock.tick(30)
 
+    # Cleanup
     if ser:
-        ser.write(b"stop\n")
+        try:
+            ser.write(b"stop\n")
+        except Exception:
+            pass
         ser.close()
     pygame.quit()
+    dpg.destroy_context()
 
 
 if __name__ == "__main__":
