@@ -661,12 +661,15 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       float alpha = 0.2f;   // tuning parameter
       vel_filter_state[motor] += alpha * (measured_vel - vel_filter_state[motor]);
       measured_vel = vel_filter_state[motor];
-      
+
       measured_vel_local[motor] = measured_vel;
       vel_local[motor] = vel;
 
       // Clamp velocity range
       if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
+
+      // clamp for testing
+      //if (vel > 0.75f) vel = 0.75f; else if (vel < -0.75f) vel = -0.75f;
       vel_local[motor] = vel;
 
       // Map magnitude to PWM, keep sign for direction
@@ -710,6 +713,16 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
         if (m < NUM_MOTORS - 1) Serial.print(", ");
       }
       Serial.println();
+
+      Serial.print("<POS_IN> ");
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+          float reading_now = getAverageReading(m);
+          float length_now = mapFloat(reading_now, ZERO_POS[m], END_POS[m], 0, SAFE_MAX_INCHES);
+          Serial.print(length_now, 3);
+          if (m < NUM_MOTORS - 1) Serial.print(", ");
+      }
+      Serial.println();
+
     }
 
     unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
