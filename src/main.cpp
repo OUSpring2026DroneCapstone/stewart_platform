@@ -550,6 +550,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
   float Kp = 0.25f;
 
   float start_ext[NUM_MOTORS];
+  
   float end_ext[NUM_MOTORS];
   float max_ext[NUM_MOTORS];
   for (uint8_t m = 0; m < NUM_MOTORS; m++) {
@@ -557,6 +558,12 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     end_ext[m]   = 0.0f;
     max_ext[m]   = -1e9f;
   }
+
+  float prev_length_now[NUM_MOTORS];
+  bool first_sample = true;
+
+  static float vel_filter_state[NUM_MOTORS] = {0};
+
 
   for (int step = 0; step <= steps; step++) {
 
@@ -594,6 +601,11 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     lerp(pos0, pos1, t_next, T_next);
 
     float pwm_local[NUM_MOTORS];
+    float vel_local[NUM_MOTORS];   // store velocity per motor (commanded)
+    float measured_vel_local[NUM_MOTORS];
+    
+    
+
 
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
       const float* base = bases[motor];
@@ -626,12 +638,36 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
       float reading_now = getAverageReading(motor);
       float length_now = mapFloat(reading_now, ZERO_POS[motor], END_POS[motor], 0, SAFE_MAX_INCHES) + length_min;
-      float error = length_t - length_now;
 
+      float measured_vel = 0.0f;
+
+      if (!first_sample) {
+        float dt = duration / steps;   // seconds per step
+        measured_vel = (length_now - prev_length_now[motor]) / dt;
+      }
+      prev_length_now[motor] = length_now;
+
+      float error = length_t - length_now;
+      
+      bool motors_enabled = (digitalRead(ENABLE_MOTORS) == LOW);
+      
       float vel = (length_next - length_t + error * Kp) * steps / duration;
+      
+      if (!motors_enabled) {
+        vel = 0.0f;
+        measured_vel = 0.0f;
+      }
+      
+      float alpha = 0.2f;   // tuning parameter
+      vel_filter_state[motor] += alpha * (measured_vel - vel_filter_state[motor]);
+      measured_vel = vel_filter_state[motor];
+      
+      measured_vel_local[motor] = measured_vel;
+      vel_local[motor] = vel;
 
       // Clamp velocity range
       if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
+      vel_local[motor] = vel;
 
       // Map magnitude to PWM, keep sign for direction
       int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
@@ -653,6 +689,27 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
             digitalWrite(DIR_PINS[motor], (p > 0) ? EXTEND : RETRACT);
             analogWrite(PWM_PINS[motor], abs(p));
         }
+    }
+
+    first_sample = false;
+
+    bool motors_enabled = (digitalRead(ENABLE_MOTORS) == LOW);
+
+    if (motors_enabled) {
+
+      Serial.print("<CMD_VEL_PER_SEC> ");
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print(vel_local[m], 3);
+        if (m < NUM_MOTORS - 1) Serial.print(", ");
+      }
+      Serial.println();
+
+      Serial.print("<MEAS_VEL> ");
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print(measured_vel_local[m], 3);
+        if (m < NUM_MOTORS - 1) Serial.print(", ");
+      }
+      Serial.println();
     }
 
     unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
