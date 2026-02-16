@@ -1,39 +1,65 @@
 """
-Dear PyGui-based GUI (hybrid):
+Dear PyGui-based GUI (dashboard reskin):
  - Uses Dear PyGui for UI
  - Keeps pygame joystick backend and serial logic
  - Preserves original behavior and commands
+ - Adds responsive dashboard layout + card styling
 """
 
 import sys
 import time
 import serial
+from serial.tools import list_ports
 import pygame
 from joystick import JoystickBackend
 import dearpygui.dearpygui as dpg
 
 BAUD_RATE = 115200
-
-# Theme colors (modern dark)
-BG_MAIN = (22, 20, 33)
-BG_LEFT = (32, 29, 46)
-BG_CARD = (42, 38, 61)
-ACCENT = (0, 215, 170)
-TEXT_MAIN = (235, 240, 248)
-TEXT_MUTED = (168, 176, 194)
-
-# Arduino log cap
 MAX_LOG_LINES = 18
+
+# ---------------- dashboard theme (dark + red accent) ----------------
+COL_BG = (12, 14, 20)
+COL_TOPBAR = (16, 18, 26)
+COL_SIDEBAR = (16, 18, 26)
+COL_CARD = (20, 24, 34)
+COL_CARD_2 = (24, 29, 41)
+COL_BORDER = (40, 48, 66)
+COL_TEXT = (235, 240, 250)
+COL_MUTED = (150, 160, 180)
+COL_ACCENT = (235, 55, 78)
+COL_ACCENT_HOVER = (255, 85, 105)
+COL_GOOD = (70, 220, 170)
+COL_WARN = (255, 185, 70)
+COL_BAD = (255, 90, 100)
+
+SIDEBAR_W = 300
+TOPBAR_H = 72
+PAD = 16
 
 
 def main():
-    # Init pygame for joystick backend
-
     pygame.init()
 
     # ---------------- serial (optional) ----------------
     ser = None
-    port = sys.argv[1] if len(sys.argv) >= 2 else None
+    def detect_serial_port():
+        ports = list(list_ports.comports())
+        if not ports:
+            return None
+
+        # Prefer common Arduino USB/ACM device names
+        preferred = []
+        for p in ports:
+            desc = (p.description or "").lower()
+            dev = (p.device or "").lower()
+            if "arduino" in desc or "usb" in desc or "acm" in dev or "usb" in dev:
+                preferred.append(p.device)
+
+        if preferred:
+            return preferred[0]
+        return ports[0].device
+
+    port = sys.argv[1] if len(sys.argv) >= 2 else detect_serial_port()
     if port:
         try:
             ser = serial.Serial(port, BAUD_RATE, timeout=0)
@@ -43,7 +69,9 @@ def main():
             except Exception:
                 pass
         except Exception as e:
+            available = ", ".join(p.device for p in list_ports.comports()) or "(none)"
             print(f"[Serial] Failed to open {port}: {e}")
+            print(f"[Serial] Available ports: {available}")
             ser = None
 
     # ---------------- backend ----------------
@@ -54,6 +82,7 @@ def main():
         if ser:
             ser.write((cmd + "\n").encode())
             print(f">>> SENT: {cmd}")
+
         if cmd == "controller":
             controller_mode = True
             joystick.enable_controller()
@@ -71,62 +100,131 @@ def main():
     menu = MAIN
     active_preset = None
     waiting_for_center = False
+    arduino_log: list[str] = []
 
     # ---------------- Dear PyGui setup ----------------
     dpg.create_context()
-    dpg.create_viewport(title="Stewart Platform Control", width=1200, height=650)
+    dpg.create_viewport(title="Stewart Platform Control", width=1280, height=720, resizable=True)
     dpg.setup_dearpygui()
-    arduino_log: list[str] = []
     dpg.show_viewport()
 
-    # Simple theme
-    with dpg.theme() as app_theme:
+    is_fullscreen = False
+
+    def toggle_fullscreen():
+        nonlocal is_fullscreen
+        is_fullscreen = not is_fullscreen
+        dpg.set_viewport_properties(fullscreen=is_fullscreen)
+
+    # ---------------- themes ----------------
+    with dpg.theme() as theme_global:
         with dpg.theme_component(dpg.mvAll):
-            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, BG_MAIN)
-            dpg.add_theme_color(dpg.mvThemeCol_Text, TEXT_MAIN)
-            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 8)
+            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, COL_BG)
+            dpg.add_theme_color(dpg.mvThemeCol_PopupBg, COL_CARD)
+            dpg.add_theme_color(dpg.mvThemeCol_Text, COL_TEXT)
+            dpg.add_theme_color(dpg.mvThemeCol_Border, COL_BORDER)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 14)
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 12)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 14)
+            dpg.add_theme_style(dpg.mvStyleVar_PopupRounding, 12)
+            dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 14, 10)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 0, 0)
             dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 10, 10)
-    dpg.bind_theme(app_theme)
+            dpg.add_theme_style(dpg.mvStyleVar_ScrollbarRounding, 12)
 
-    # Root windows
-    with dpg.window(no_title_bar=True, no_resize=True, no_move=True, pos=(0, 0), width=1200, height=60):
-        dpg.add_text("Stewart Platform", color=TEXT_MAIN)
-        dpg.add_text(" ")
+    with dpg.theme() as theme_topbar:
+        with dpg.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, COL_TOPBAR)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 0)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, PAD, PAD)
 
-    with dpg.window(tag="left_panel", no_title_bar=True, pos=(0, 60), width=380, height=590):
-        dpg.add_text(tag="menu_title", default_value="MAIN", color=TEXT_MUTED)
-        dpg.add_separator()
+    with dpg.theme() as theme_sidebar:
+        with dpg.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, COL_SIDEBAR)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 0)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, PAD, PAD)
 
-    with dpg.window(tag="viz_panel", no_title_bar=True, pos=(380 + 40, 100), width=520, height=470):
-        dpg.add_text("ARDUINO LOG", color=(140, 150, 200))
-        dpg.add_separator()
-        dpg.add_text(tag="arduino_log_text", default_value="", color=(90, 110, 140))
-        dpg.add_spacer(height=12)
-        dpg.add_text("CONTROLS", color=(140, 150, 200))
-        dpg.add_separator()
-        dpg.add_text(tag="controls_text", default_value="", color=TEXT_MUTED)
-        dpg.add_spacer(height=8)
-        dpg.add_text(tag="running_label", default_value="", color=TEXT_MUTED)
-        dpg.add_text(tag="mode_label", default_value="", color=(138, 150, 190))
+    with dpg.theme() as theme_card:
+        with dpg.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, COL_CARD)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, PAD, PAD)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 16)
 
-    # Popup helper
+    with dpg.theme() as theme_card_inner:
+        with dpg.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, COL_CARD_2)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 12, 12)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 14)
+
+    with dpg.theme() as theme_btn_primary:
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, COL_ACCENT)
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, COL_ACCENT_HOVER)
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, COL_ACCENT_HOVER)
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 255, 255))
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 14)
+
+    with dpg.theme() as theme_btn_ghost:
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (255, 255, 255, 25))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (255, 255, 255, 35))
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 255, 255))
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 12)
+
+    with dpg.theme() as theme_btn_sidebar:
+        with dpg.theme_component(dpg.mvButton):
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (255, 255, 255, 18))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (255, 255, 255, 30))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (255, 255, 255, 40))
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 255, 255))
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 14)
+
+    dpg.bind_theme(theme_global)
+
+    # ---------------- layout helpers ----------------
+    def viewport_size():
+        return dpg.get_viewport_client_width(), dpg.get_viewport_client_height()
+
+    def apply_layout():
+        w, h = viewport_size()
+        dpg.configure_item("root", width=w, height=h)
+        dpg.configure_item("topbar", width=w, height=TOPBAR_H)
+        dpg.configure_item("main_area", width=w, height=h - TOPBAR_H)
+
+        # content sizes
+        content_w = max(320, w - SIDEBAR_W)
+        content_h = max(240, h - TOPBAR_H)
+
+        dpg.configure_item("sidebar", width=SIDEBAR_W, height=content_h)
+        dpg.configure_item("content", width=content_w, height=content_h)
+
+    def on_viewport_resize(sender, app_data):
+        apply_layout()
+
+    dpg.set_viewport_resize_callback(on_viewport_resize)
+
+    # ---------------- popup helper ----------------
     def show_popup(messages):
         if isinstance(messages, str):
             messages = [messages]
-        # Delete existing popup if present
         if dpg.does_item_exist("popup"):
             dpg.delete_item("popup")
-        with dpg.window(modal=True, no_title_bar=True, tag="popup", pos=(340, 220), width=520, height=220):
-            dpg.add_text("Connection Required", color=TEXT_MAIN)
+        w, h = viewport_size()
+        pw, ph = 520, 240
+        px, py = (w - pw) // 2, (h - ph) // 2
+        with dpg.window(modal=True, no_title_bar=True, tag="popup", pos=(px, py), width=pw, height=ph):
+            dpg.add_text("Connection Required", color=COL_TEXT)
+            dpg.add_spacer(height=6)
             dpg.add_separator()
-            for msg in messages:
-                dpg.add_text(msg, color=TEXT_MAIN)
             dpg.add_spacer(height=8)
-            dpg.add_button(label="OK", width=120, callback=lambda *args, **kwargs: dpg.delete_item("popup"))
+            for msg in messages:
+                dpg.add_text(f"• {msg}", color=COL_TEXT)
+            dpg.add_spacer(height=12)
+            dpg.bind_item_theme(dpg.add_button(label="OK", width=140, callback=lambda: dpg.delete_item("popup")), theme_btn_primary)
 
     def connection_error_for(action_label):
         missing = []
-        serial_required = {"CENTER", "STOP", "DEMO", "FIGURE 8", "RESTART"}
+        serial_required = {"CENTER", "STOP", "DEMO", "FIGURE 8", "RESTART", "ORBIT", "WAVE"}
         controller_actions = {"CONTROLLER"}
         if action_label in serial_required or action_label in controller_actions:
             if not ser:
@@ -136,45 +234,155 @@ def main():
                 missing.append("Joystick not connected")
         return missing or None
 
-    # Build left panel buttons depending on menu
-    def rebuild_buttons():
-        if dpg.does_item_exist("buttons_container"):
-            dpg.delete_item("buttons_container")
-        # Use a simple group as container for reliable rebuilds
-        with dpg.group(tag="buttons_container", parent="left_panel"):
-            labels = []
-            if menu == MAIN:
-                labels = ["START", "CENTER", "CALIBRATE", "STOP"]
-                dpg.configure_item("menu_title", default_value="MAIN")
-            elif menu == START_MENU:
-                labels = ["CONTROLLER", "PRESETS", "BACK"]
-                dpg.configure_item("menu_title", default_value="START MENU")
-            elif menu == PRESETS:
-                labels = ["DEMO", "FIGURE 8", "BACK"]
-                dpg.configure_item("menu_title", default_value="PRESETS")
-            elif menu == RUNNING:
-                labels = ["RESTART", "STOP"]
-                dpg.configure_item("menu_title", default_value="RUNNING")
+    # ---------------- UI build ----------------
+    with dpg.window(tag="root", no_title_bar=True, no_resize=True, no_move=True, pos=(0, 0)):
+        # TOP BAR
+        with dpg.child_window(tag="topbar", border=False):
+            dpg.bind_item_theme("topbar", theme_topbar)
 
-            for lab in labels:
-                dpg.add_button(label=lab, height=42, width=260,
-                               callback=on_button_callback, user_data=lab)
-                dpg.add_spacer(height=12)
+            with dpg.group(horizontal=True):
+                dpg.add_text("Stewart Platform", color=COL_TEXT)
+                dpg.add_spacer(width=12)
+                dpg.add_text("Control Dashboard", color=COL_MUTED)
 
-            if joystick.available:
-                dpg.add_separator()
-                dpg.add_text("JOYSTICK MODE", color=TEXT_MUTED)
-                dpg.add_button(label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"), height=36, width=220,
-                               callback=toggle_mode, tag="mode_toggle")
+            dpg.add_spacer(height=8)
 
+            with dpg.group(horizontal=True):
+                # status pills
+                dpg.add_text("●", color=(0, 0, 0, 0))
+                dpg.add_text(tag="status_serial", default_value="Serial: DISCONNECTED", color=COL_WARN)
+                dpg.add_spacer(width=18)
+                dpg.add_text(tag="status_joy", default_value="Joystick: DISCONNECTED", color=COL_WARN)
+                dpg.add_spacer(width=18)
+                dpg.add_text(tag="status_mode", default_value="Mode: —", color=COL_MUTED)
+                dpg.add_spacer(width=24)
+
+                # right-side actions
+                dpg.add_spacer(width=24)
+                btn_fs = dpg.add_button(label="⛶ Fullscreen", width=150, callback=lambda: toggle_fullscreen())
+                dpg.bind_item_theme(btn_fs, theme_btn_ghost)
+
+        # MAIN AREA: sidebar + content
+        with dpg.child_window(tag="main_area", border=False):
+            with dpg.table(header_row=False, resizable=False, policy=dpg.mvTable_SizingFixedFit,
+                           borders_innerV=False, borders_outerV=False, borders_innerH=False, borders_outerH=False):
+                dpg.add_table_column(width_fixed=True, init_width_or_weight=SIDEBAR_W)
+                dpg.add_table_column(width_fixed=False)
+
+                with dpg.table_row():
+                    # SIDEBAR
+                    with dpg.child_window(tag="sidebar", border=False):
+                        dpg.bind_item_theme("sidebar", theme_sidebar)
+
+                        # red accent strip (left edge)
+                        with dpg.drawlist(width=8, height=-1):
+                            dpg.draw_rectangle((0, 0), (8, 2000), fill=COL_ACCENT, thickness=0)
+
+                        dpg.add_spacer(height=4)
+                        dpg.add_text("MENU", color=COL_MUTED)
+                        dpg.add_spacer(height=6)
+                        dpg.add_separator()
+                        dpg.add_spacer(height=10)
+
+                        dpg.add_text(tag="menu_title", default_value="MAIN", color=COL_TEXT)
+                        dpg.add_spacer(height=10)
+
+                        # buttons container (rebuilt)
+                        with dpg.group(tag="buttons_container"):
+                            pass
+
+                        dpg.add_spacer(height=10)
+                        dpg.add_separator()
+                        dpg.add_spacer(height=10)
+
+                        dpg.add_text("Shortcuts", color=COL_TEXT)
+                        dpg.add_spacer(height=6)
+                        dpg.add_text("F11: Fullscreen", color=COL_MUTED)
+                        dpg.add_text("A/B/X/Y: Controller actions", color=COL_MUTED)
+
+                    # CONTENT
+                    with dpg.child_window(tag="content", border=False):
+                        # --- dashboard grid ---
+                        with dpg.table(header_row=False, resizable=False, policy=dpg.mvTable_SizingStretchProp,
+                                       borders_innerV=False, borders_outerV=False, borders_innerH=False, borders_outerH=False):
+
+                            dpg.add_table_column(init_width_or_weight=1)
+                            dpg.add_table_column(init_width_or_weight=1)
+                            dpg.add_table_column(init_width_or_weight=1)
+
+                            # ===== Row 1: metrics =====
+                            with dpg.table_row():
+                                for tag, title in [("metric_serial", "Serial"), ("metric_joy", "Joystick"), ("metric_mode", "Mode")]:
+                                    with dpg.child_window(tag=tag, border=False, height=90):
+                                        dpg.bind_item_theme(tag, theme_card)
+                                        dpg.add_text(title, color=COL_MUTED)
+                                        dpg.add_spacer(height=6)
+                                        dpg.add_text("", tag=f"{tag}_value", color=COL_TEXT)
+
+                            # spacer row
+                            with dpg.table_row():
+                                dpg.add_spacer(height=10)
+                                dpg.add_spacer(height=10)
+                                dpg.add_spacer(height=10)
+
+                        # ===== Row 2: log + controls (2 columns) =====
+                        with dpg.table(header_row=False, resizable=False, policy=dpg.mvTable_SizingStretchProp,
+                                       borders_innerV=False, borders_outerV=False, borders_innerH=False, borders_outerH=False):
+
+                            dpg.add_table_column(init_width_or_weight=2)
+                            dpg.add_table_column(init_width_or_weight=1)
+
+                            with dpg.table_row():
+                                # --- Arduino Log Card ---
+                                with dpg.child_window(tag="card_log", border=False, height=340):
+                                    dpg.bind_item_theme("card_log", theme_card)
+
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("Arduino Log", color=COL_TEXT)
+                                        dpg.add_spacer(width=10)
+                                        dpg.add_text(tag="running_label", default_value="", color=COL_GOOD)
+
+                                    dpg.add_spacer(height=8)
+                                    dpg.add_separator()
+                                    dpg.add_spacer(height=10)
+
+                                    with dpg.child_window(tag="log_box", border=False, height=-1):
+                                        dpg.bind_item_theme("log_box", theme_card_inner)
+                                        dpg.add_text(tag="arduino_log_text", default_value="", color=COL_MUTED)
+
+                                # --- Controls Card ---
+                                with dpg.child_window(tag="card_controls", border=False, height=340):
+                                    dpg.bind_item_theme("card_controls", theme_card)
+
+                                    with dpg.group(horizontal=True):
+                                        dpg.add_text("Controls", color=COL_TEXT)
+                                        dpg.add_spacer(width=10)
+                                        dpg.add_text(tag="mode_label", default_value="", color=COL_ACCENT)
+
+                                    dpg.add_spacer(height=8)
+                                    dpg.add_separator()
+                                    dpg.add_spacer(height=10)
+
+                                    dpg.add_text(tag="controls_text", default_value="", color=COL_MUTED)
+
+                        # ===== Row 3: optional bottom card =====
+                        dpg.add_spacer(height=14)
+                        with dpg.child_window(tag="card_bottom", border=False, height=160):
+                            dpg.bind_item_theme("card_bottom", theme_card)
+                            dpg.add_text("Notes / Activity", color=COL_TEXT)
+                            dpg.add_spacer(height=8)
+                            dpg.add_separator()
+                            dpg.add_spacer(height=10)
+                            dpg.add_text("Tip: Put controller hints, warnings, or last command sent here.", color=COL_MUTED)
+
+    # Responsive sizing initial
+    apply_layout()
+
+    # ---------------- menu logic ----------------
     def toggle_mode(sender=None, app_data=None, user_data=None):
         joystick.toggle_mode()
         dpg.configure_item("mode_toggle", label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"))
         print(f"[Mode] Switched to {'D-PAD' if joystick.dpad_mode else 'ANALOG'}")
-
-    def on_button_callback(sender, app_data, user_data):
-        # Route Dear PyGui button callbacks to our label-based handler
-        on_button(user_data)
 
     def on_button(label):
         nonlocal menu, waiting_for_center, active_preset
@@ -183,7 +391,6 @@ def main():
             rebuild_buttons()
             return
 
-        # Show connection warnings but DO NOT block actions
         errs = connection_error_for(label)
         if errs:
             show_popup(errs)
@@ -207,15 +414,9 @@ def main():
                 rebuild_buttons()
 
         elif menu == PRESETS:
-            if label == "DEMO":
-                active_preset = "demo"
-                send_command("center")
-                waiting_for_center = True
-                menu = RUNNING
-                dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
-                rebuild_buttons()
-            elif label == "FIGURE 8":
-                active_preset = "figure8"
+            if label in {"DEMO", "FIGURE 8", "ORBIT", "WAVE"}:
+                preset_map = {"DEMO": "demo", "FIGURE 8": "figure8", "ORBIT": "orbit", "WAVE": "wave"}
+                active_preset = preset_map[label]
                 send_command("center")
                 waiting_for_center = True
                 menu = RUNNING
@@ -235,13 +436,68 @@ def main():
                 menu = MAIN
                 rebuild_buttons()
 
+    def on_button_callback(sender, app_data, user_data):
+        on_button(user_data)
+
+    def rebuild_buttons():
+        if dpg.does_item_exist("buttons_container"):
+            dpg.delete_item("buttons_container")
+
+        with dpg.group(tag="buttons_container", parent="sidebar"):
+            # left padding hack (keeps buttons from touching edge)
+            dpg.add_spacer(height=2)
+
+            labels = []
+            if menu == MAIN:
+                labels = ["START", "CENTER", "CALIBRATE", "STOP"]
+                dpg.configure_item("menu_title", default_value="MAIN")
+            elif menu == START_MENU:
+                labels = ["CONTROLLER", "PRESETS", "BACK"]
+                dpg.configure_item("menu_title", default_value="START MENU")
+            elif menu == PRESETS:
+                labels = ["DEMO", "FIGURE 8", "ORBIT", "WAVE", "BACK"]
+                dpg.configure_item("menu_title", default_value="PRESETS")
+            elif menu == RUNNING:
+                labels = ["RESTART", "STOP"]
+                dpg.configure_item("menu_title", default_value="RUNNING")
+
+            for i, lab in enumerate(labels):
+                btn = dpg.add_button(label=lab, height=46, width=SIDEBAR_W - (PAD * 2),
+                                     callback=on_button_callback, user_data=lab)
+                dpg.bind_item_theme(btn, theme_btn_ghost)
+
+                # Make STOP pop slightly
+                if lab == "STOP":
+                    dpg.bind_item_theme(btn, theme_btn_primary)
+
+                dpg.add_spacer(height=10)
+
+            # joystick mode toggle (only if joystick exists)
+            if joystick.available:
+                dpg.add_spacer(height=6)
+                dpg.add_separator()
+                dpg.add_spacer(height=10)
+                dpg.add_text("JOYSTICK", color=COL_TEXT)
+                dpg.add_spacer(height=8)
+                mt = dpg.add_button(
+                    tag="mode_toggle",
+                    label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"),
+                    height=40,
+                    width=SIDEBAR_W - (PAD * 2),
+                    callback=toggle_mode
+                )
+                dpg.bind_item_theme(mt, theme_btn_ghost)
+
     rebuild_buttons()
 
     def build_controls_text():
         if not joystick.available:
             return (
-                "Connect a joystick to enable controller shortcuts.\n"
-                "A: Enable controller\nB: Stop\nX: Center\nY: Run demo"
+                "Connect a joystick to enable controller shortcuts.\n\n"
+                "A: Enable controller\n"
+                "B: Stop\n"
+                "X: Center\n"
+                "Y: Run demo"
             )
         if joystick.dpad_mode:
             lines = [
@@ -268,11 +524,16 @@ def main():
             ]
         return "\n".join(lines)
 
-    # Main render loop with backend processing
+    # ---------------- main loop ----------------
     clock = pygame.time.Clock()
     while dpg.is_dearpygui_running():
-        # Process joystick events and ticking
         events = pygame.event.get()
+
+        # F11 fullscreen
+        for event in events:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                toggle_fullscreen()
+
         joystick.handle_events(events)
         joystick.tick()
 
@@ -292,6 +553,7 @@ def main():
                     arduino_log.append(line)
                     if len(arduino_log) > MAX_LOG_LINES:
                         arduino_log.pop(0)
+
                     if waiting_for_center and "Centered. Motors disabled." in line:
                         waiting_for_center = False
                         if active_preset:
@@ -299,16 +561,43 @@ def main():
                             menu = RUNNING
                             dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
 
-        # Update labels
+        # Update top status
+        dpg.configure_item("status_serial", default_value=f"Serial: {'CONNECTED' if ser else 'DISCONNECTED'}",
+                           color=(COL_GOOD if ser else COL_WARN))
+        dpg.configure_item("status_joy", default_value=f"Joystick: {'CONNECTED' if joystick.available else 'DISCONNECTED'}",
+                           color=(COL_GOOD if joystick.available else COL_WARN))
+        mode_text = "D-PAD" if joystick.available and joystick.dpad_mode else ("ANALOG" if joystick.available else "—")
+        dpg.configure_item("status_mode", default_value=f"Mode: {mode_text}", color=COL_MUTED)
+
+        # Update metric cards
+        dpg.configure_item("metric_serial_value",
+                           default_value=("CONNECTED" if ser else "DISCONNECTED"),
+                           color=(COL_GOOD if ser else COL_WARN))
+
+        dpg.configure_item("metric_joy_value",
+                           default_value=("CONNECTED" if joystick.available else "DISCONNECTED"),
+                           color=(COL_GOOD if joystick.available else COL_WARN))
+
+        metric_mode_text = "—"
+        if joystick.available:
+            metric_mode_text = "D-PAD" if joystick.dpad_mode else "ANALOG"
+
+        dpg.configure_item("metric_mode_value",
+                           default_value=metric_mode_text,
+                           color=COL_TEXT)
+
+        # Update card labels/text
         if menu == RUNNING and active_preset:
             dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
         else:
             dpg.configure_item("running_label", default_value="")
 
-        mode_text = "MODE: D-PAD (discrete positions)" if joystick.dpad_mode else "MODE: ANALOG (continuous + directional tilt)"
+        mode_label = "MODE: D-PAD (discrete positions)" if joystick.available and joystick.dpad_mode else \
+                     ("MODE: ANALOG (continuous + directional tilt)" if joystick.available else "MODE: —")
+        dpg.configure_item("mode_label", default_value=mode_label)
+
         dpg.configure_item("controls_text", default_value=build_controls_text())
         dpg.configure_item("arduino_log_text", default_value="\n".join(arduino_log))
-        dpg.configure_item("mode_label", default_value=mode_text)
 
         dpg.render_dearpygui_frame()
         clock.tick(30)

@@ -631,7 +631,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       float vel = (length_next - length_t + error * Kp) * steps / duration;
 
       // Clamp velocity range
-      if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
+      if (vel > 0.75f) vel = 0.75f; else if (vel < -0.75f) vel = -0.75f;
 
       // Map magnitude to PWM, keep sign for direction
       int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
