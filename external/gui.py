@@ -124,6 +124,32 @@ def main():
     waiting_for_center = False
     arduino_log: list[str] = []
     leg_extensions: list[float] = [0.0] * NUM_LEGS  # inches
+    # Serial parsing state for multi-line metric blocks
+    pending_tag: str | None = None
+    pending_values: list[float] = []
+    latest_meas_vel: list[float] | None = None
+
+    def finalize_pending():
+        nonlocal pending_tag, pending_values, leg_extensions, latest_meas_vel
+        if not pending_tag:
+            return
+        vals = pending_values[:]
+        if pending_tag == "POS_IN" and vals:
+            # Update available indices; keep the rest unchanged
+            for i, v in enumerate(vals):
+                if i >= NUM_LEGS:
+                    break
+                v = max(LEG_MIN_IN, min(LEG_MAX_IN, v))
+                leg_extensions[i] = v
+        elif pending_tag == "MEAS_VEL" and vals:
+            # Pad/trim to NUM_LEGS for plotting
+            filled = [0.0] * NUM_LEGS
+            for i in range(min(NUM_LEGS, len(vals))):
+                filled[i] = vals[i]
+            latest_meas_vel = filled
+        # reset
+        pending_tag = None
+        pending_values = []
 
     # ---------------- Dear PyGui setup ----------------
     dpg.create_context()
@@ -232,6 +258,13 @@ def main():
     def viewport_size():
         return dpg.get_viewport_client_width(), dpg.get_viewport_client_height()
 
+    def compute_top_row_h():
+        # Scale top row height with viewport/content height, clamped for usability
+        w, h = viewport_size()
+        content_h = max(240, h - TOPBAR_H)
+        val = int(content_h * 0.38)
+        return max(220, min(360, val))
+
     def apply_layout():
         w, h = viewport_size()
         aw = w - LEFT_MARGIN - RIGHT_MARGIN  # available width after left & right margins
@@ -245,9 +278,33 @@ def main():
 
         dpg.configure_item("sidebar", width=SIDEBAR_W, height=content_h)
         dpg.configure_item("content", width=content_w, height=content_h)
-        # ensure telemetry keeps a fixed height so 3D fills remaining space
+        # Dynamically size top row cards and telemetry plot based on viewport
+        top_h = compute_top_row_h()
+        if dpg.does_item_exist("card_pose"):
+            dpg.configure_item("card_pose", height=top_h)
+        if dpg.does_item_exist("card_legs"):
+            dpg.configure_item("card_legs", height=top_h)
         if dpg.does_item_exist("card_telemetry"):
-            dpg.configure_item("card_telemetry", height=320)
+            dpg.configure_item("card_telemetry", height=top_h)
+            plot_h = max(160, top_h - (PAD*4 + 60))
+            # adjust heights for tabbed plots if present
+            if dpg.does_item_exist("plot_pose"):
+                dpg.configure_item("plot_pose", height=plot_h)
+            if dpg.does_item_exist("plot_legs"):
+                dpg.configure_item("plot_legs", height=plot_h)
+            if dpg.does_item_exist("plot_snapshot"):
+                dpg.configure_item("plot_snapshot", height=plot_h)
+
+        # adjust bottom-right deep telemetry plots heights
+        if dpg.does_item_exist("card_deep"):
+            card_h = dpg.get_item_height("card_deep") or 240
+            plot_h2 = max(160, card_h - (PAD*4 + 60))
+            if dpg.does_item_exist("plot_vel"):
+                dpg.configure_item("plot_vel", height=plot_h2)
+            if dpg.does_item_exist("plot_accel"):
+                dpg.configure_item("plot_accel", height=plot_h2)
+            if dpg.does_item_exist("plot_sat"):
+                dpg.configure_item("plot_sat", height=plot_h2)
 
     def on_viewport_resize(sender, app_data):
         apply_layout()
@@ -323,66 +380,132 @@ def main():
 
                     # CONTENT
                     with dpg.child_window(tag="content", border=False):
-                        # ===== Row 1: Pose + Actuators =====
+
+                        # =========================
+                        # TOP ROW: Pose | Actuators | Telemetry
+                        # =========================
+                        TOP_ROW_H = compute_top_row_h()
+
                         with dpg.table(header_row=False, resizable=False, policy=dpg.mvTable_SizingStretchProp,
                                        borders_innerV=False, borders_outerV=False, borders_innerH=False, borders_outerH=False):
-                            dpg.add_table_column(init_width_or_weight=3)
-                            dpg.add_table_column(init_width_or_weight=2)
+                            dpg.add_table_column(init_width_or_weight=3)  # pose
+                            dpg.add_table_column(init_width_or_weight=2)  # legs
+                            dpg.add_table_column(init_width_or_weight=2)  # telemetry
 
                             with dpg.table_row():
+
                                 # --- Pose Display ---
-                                with dpg.child_window(tag="card_pose", border=False, height=260):
-                                    dpg.bind_item_theme("card_pose", theme_card)
-                                    dpg.add_spacer(height=PAD)
-                                    with dpg.group(indent=PAD):
-                                        dpg.add_text("Platform Pose", color=COL_MUTED)
-                                        dpg.add_spacer(height=3)
+                                with dpg.table_cell():
+                                    with dpg.child_window(tag="card_pose", border=False, height=TOP_ROW_H):
+                                        dpg.bind_item_theme("card_pose", theme_card)
+                                        dpg.add_spacer(height=PAD)
+                                        with dpg.group(indent=PAD):
+                                            dpg.add_text("Platform Pose", color=COL_MUTED)
+                                            dpg.add_spacer(height=3)
 
-                                        pose_axes = [
-                                            ("pose_roll",  "Roll"),
-                                            ("pose_pitch", "Pitch"),
-                                            ("pose_yaw",   "Yaw"),
-                                            ("pose_x",     "X"),
-                                            ("pose_y",     "Y"),
-                                            ("pose_z",     "Z"),
-                                        ]
-                                        for ax_tag, ax_label in pose_axes:
-                                            with dpg.group(horizontal=True):
-                                                dpg.add_text(f"{ax_label:>5s}", color=COL_MUTED)
-                                                dpg.add_spacer(width=6)
-                                                bar = dpg.add_progress_bar(tag=ax_tag, default_value=0.5,
-                                                                           overlay="0.0", width=-(PAD + 60 + SCROLL_W))
-                                                dpg.bind_item_theme(bar, theme_bar_accent)
-                                                dpg.add_text("", tag=f"{ax_tag}_val", color=COL_TEXT)
+                                            pose_axes = [
+                                                ("pose_roll",  "Roll"),
+                                                ("pose_pitch", "Pitch"),
+                                                ("pose_yaw",   "Yaw"),
+                                                ("pose_x",     "X"),
+                                                ("pose_y",     "Y"),
+                                                ("pose_z",     "Z"),
+                                            ]
+                                            for ax_tag, ax_label in pose_axes:
+                                                with dpg.group(horizontal=True):
+                                                    dpg.add_text(f"{ax_label:>5s}", color=COL_MUTED)
+                                                    dpg.add_spacer(width=6)
+                                                    bar = dpg.add_progress_bar(
+                                                        tag=ax_tag,
+                                                        default_value=0.5,
+                                                        overlay="0.0",
+                                                        width=-(PAD + 60 + SCROLL_W),
+                                                    )
+                                                    dpg.bind_item_theme(bar, theme_bar_accent)
+                                                    dpg.add_text("", tag=f"{ax_tag}_val", color=COL_TEXT)
 
-                                # --- Actuator Status ---
-                                with dpg.child_window(tag="card_legs", border=False, height=260):
-                                    dpg.bind_item_theme("card_legs", theme_card)
-                                    dpg.add_spacer(height=PAD)
-                                    with dpg.group(indent=PAD):
-                                        dpg.add_text("Actuators", color=COL_MUTED)
-                                        dpg.add_spacer(height=6)
+                                # --- Actuators ---
+                                with dpg.table_cell():
+                                    with dpg.child_window(tag="card_legs", border=False, height=TOP_ROW_H):
+                                        dpg.bind_item_theme("card_legs", theme_card)
+                                        dpg.add_spacer(height=PAD)
+                                        with dpg.group(indent=PAD):
+                                            dpg.add_text("Actuators", color=COL_MUTED)
+                                            dpg.add_spacer(height=6)
 
-                                        for i in range(NUM_LEGS):
-                                            with dpg.group(horizontal=True):
-                                                dpg.add_text(f"Leg {i+1}", color=COL_MUTED)
-                                                dpg.add_spacer(width=4)
-                                                bar = dpg.add_progress_bar(tag=f"leg_{i}", default_value=0.0,
-                                                                           overlay="--", width=-(PAD + 60 + SCROLL_W))
-                                                dpg.bind_item_theme(bar, theme_bar_good)
-                                                dpg.add_text("", tag=f"leg_{i}_val", color=COL_TEXT)
+                                            for i in range(NUM_LEGS):
+                                                with dpg.group(horizontal=True):
+                                                    dpg.add_text(f"Leg {i+1}", color=COL_MUTED)
+                                                    dpg.add_spacer(width=4)
+                                                    bar = dpg.add_progress_bar(
+                                                        tag=f"leg_{i}",
+                                                        default_value=0.0,
+                                                        overlay="--",
+                                                        width=-(PAD + 60 + SCROLL_W),
+                                                    )
+                                                    dpg.bind_item_theme(bar, theme_bar_good)
+                                                    dpg.add_text("", tag=f"leg_{i}_val", color=COL_TEXT)
+
+                                # --- Telemetry ---
+                                with dpg.table_cell():
+                                    with dpg.child_window(tag="card_telemetry", border=False, height=TOP_ROW_H):
+                                        dpg.bind_item_theme("card_telemetry", theme_card)
+                                        dpg.add_spacer(height=PAD)
+                                        with dpg.group(indent=PAD):
+                                            dpg.add_text("Telemetry", color=COL_TEXT)
+                                            dpg.add_spacer(height=8)
+                                            dpg.add_separator()
+                                            dpg.add_spacer(height=10)
+
+                                            plot_h = max(160, TOP_ROW_H - (PAD*4 + 60))
+                                            with dpg.tab_bar():
+
+                                                # ---- A) Pose Timeseries ----
+                                                with dpg.tab(label="Pose"):
+                                                    with dpg.plot(tag="plot_pose", height=plot_h, width=-(SCROLL_W + PAD)):
+                                                        dpg.add_plot_legend()
+                                                        dpg.add_plot_axis(dpg.mvXAxis, tag="plot_pose_x", label="time (s)")
+                                                        dpg.add_plot_axis(dpg.mvYAxis, tag="plot_pose_y", label="deg / norm")
+
+                                                        dpg.add_line_series([], [], label="Roll (deg)",  parent="plot_pose_y", tag="series_roll")
+                                                        dpg.add_line_series([], [], label="Pitch (deg)", parent="plot_pose_y", tag="series_pitch")
+                                                        dpg.add_line_series([], [], label="Yaw (deg)",   parent="plot_pose_y", tag="series_yaw")
+                                                        dpg.add_line_series([], [], label="X (norm)",    parent="plot_pose_y", tag="series_x")
+                                                        dpg.add_line_series([], [], label="Y (norm)",    parent="plot_pose_y", tag="series_y")
+                                                        dpg.add_line_series([], [], label="Z (norm)",    parent="plot_pose_y", tag="series_z")
+
+                                                # ---- B) Leg Length Timeseries ----
+                                                with dpg.tab(label="Legs"):
+                                                    with dpg.plot(tag="plot_legs", height=plot_h, width=-(SCROLL_W + PAD)):
+                                                        dpg.add_plot_legend()
+                                                        dpg.add_plot_axis(dpg.mvXAxis, tag="plot_legs_x", label="time (s)")
+                                                        dpg.add_plot_axis(dpg.mvYAxis, tag="plot_legs_y", label="inches")
+
+                                                        for i in range(NUM_LEGS):
+                                                            dpg.add_line_series([], [], label=f"Leg {i+1}", parent="plot_legs_y", tag=f"series_leg_{i}")
+
+                                                # ---- C) Leg Snapshot Bars ----
+                                                with dpg.tab(label="Snapshot"):
+                                                    with dpg.plot(tag="plot_snapshot", height=plot_h, width=-(SCROLL_W + PAD)):
+                                                        dpg.add_plot_axis(dpg.mvXAxis, tag="plot_snap_x", label="leg")
+                                                        dpg.add_plot_axis(dpg.mvYAxis, tag="plot_snap_y", label="inches")
+
+                                                        # x positions 1..6, y values update
+                                                        dpg.add_bar_series([1,2,3,4,5,6], [0,0,0,0,0,0], weight=0.8, parent="plot_snap_y", tag="bars_legs")
 
                         dpg.add_spacer(height=6)
 
-                        # ===== Row 2: Log + (Telemetry over 3D) =====
+                        # =========================
+                        # BOTTOM ROW: Log | Platform Visualization
+                        # =========================
                         with dpg.table(header_row=False, resizable=False, policy=dpg.mvTable_SizingStretchProp,
                                        borders_innerV=False, borders_outerV=False, borders_innerH=False, borders_outerH=False):
-
-                            dpg.add_table_column(init_width_or_weight=2)  # log
-                            dpg.add_table_column(init_width_or_weight=1)  # right stack
+                            dpg.add_table_column(init_width_or_weight=3)  # log big
+                            dpg.add_table_column(init_width_or_weight=2)  # viz
 
                             with dpg.table_row():
-                                # LEFT CELL: Log
+
+                                # --- Arduino Log ---
                                 with dpg.table_cell():
                                     with dpg.child_window(tag="card_log", border=False, height=-1):
                                         dpg.bind_item_theme("card_log", theme_card)
@@ -401,40 +524,45 @@ def main():
                                                 dpg.bind_item_theme("log_box", theme_card_inner)
                                                 dpg.add_text(tag="arduino_log_text", default_value="", color=COL_MUTED)
 
-                                # RIGHT CELL: stack Telemetry + 3D
+                                # --- Deep Telemetry (replacing Platform Visualization) ---
                                 with dpg.table_cell():
-                                    with dpg.group():
-                                        # Telemetry (fixed height)
-                                        with dpg.child_window(tag="card_telemetry", border=False, height=260):
-                                            dpg.bind_item_theme("card_telemetry", theme_card)
-                                            dpg.add_spacer(height=PAD)
-                                            with dpg.group(indent=PAD):
-                                                dpg.add_text("Telemetry", color=COL_TEXT)
-                                                dpg.add_spacer(height=8)
-                                                dpg.add_separator()
-                                                dpg.add_spacer(height=10)
+                                    with dpg.child_window(tag="card_deep", border=False, height=-1):
+                                        dpg.bind_item_theme("card_deep", theme_card)
+                                        dpg.add_spacer(height=PAD)
+                                        with dpg.group(indent=PAD):
+                                            dpg.add_text("Deep Telemetry", color=COL_TEXT)
+                                            dpg.add_spacer(height=8)
+                                            dpg.add_separator()
+                                            dpg.add_spacer(height=10)
 
-                                                with dpg.plot(tag="telemetry_plot", height=180, width=-(SCROLL_W + PAD)):
-                                                    dpg.add_plot_legend()
-                                                    dpg.add_plot_axis(dpg.mvXAxis, tag="telemetry_x", label="time (s)")
-                                                    dpg.add_plot_axis(dpg.mvYAxis, tag="telemetry_y", label="value")
-                                                    dpg.add_line_series([], [], label="Pitch (deg)", parent="telemetry_y", tag="telemetry_series_pitch")
-                                                    dpg.add_line_series([], [], label="Z (norm)", parent="telemetry_y", tag="telemetry_series_z")
+                                            # Tabs: Velocity | Acceleration | Saturation %
+                                            with dpg.tab_bar():
+                                                # Velocity
+                                                with dpg.tab(label="Velocity"):
+                                                    with dpg.plot(tag="plot_vel", height=220, width=-(SCROLL_W + PAD)):
+                                                        dpg.add_plot_legend()
+                                                        dpg.add_plot_axis(dpg.mvXAxis, tag="plot_vel_x", label="time (s)")
+                                                        dpg.add_plot_axis(dpg.mvYAxis, tag="plot_vel_y", label="in/s")
+                                                        for i in range(NUM_LEGS):
+                                                            dpg.add_line_series([], [], label=f"Leg {i+1}", parent="plot_vel_y", tag=f"series_vel_{i}")
 
-                                        dpg.add_spacer(height=6)
+                                                # Acceleration
+                                                with dpg.tab(label="Acceleration"):
+                                                    with dpg.plot(tag="plot_accel", height=220, width=-(SCROLL_W + PAD)):
+                                                        dpg.add_plot_legend()
+                                                        dpg.add_plot_axis(dpg.mvXAxis, tag="plot_accel_x", label="time (s)")
+                                                        dpg.add_plot_axis(dpg.mvYAxis, tag="plot_accel_y", label="in/s^2")
+                                                        for i in range(NUM_LEGS):
+                                                            dpg.add_line_series([], [], label=f"Leg {i+1}", parent="plot_accel_y", tag=f"series_acc_{i}")
 
-                                        # 3D (fills remaining space in the right cell)
-                                        with dpg.child_window(tag="card_3d", border=False, height=-1):
-                                            dpg.bind_item_theme("card_3d", theme_card)
-                                            dpg.add_spacer(height=PAD)
-                                            with dpg.group(indent=PAD):
-                                                dpg.add_text("Platform Visualization", color=COL_TEXT)
-                                                dpg.add_spacer(height=8)
-                                                dpg.add_separator()
-                                                dpg.add_spacer(height=10)
-
-                                                with dpg.drawlist(width=300, height=220, tag="cube_drawlist"):
-                                                    pass
+                                                # Saturation %
+                                                with dpg.tab(label="Saturation %"):
+                                                    with dpg.plot(tag="plot_sat", height=220, width=-(SCROLL_W + PAD)):
+                                                        dpg.add_plot_legend()
+                                                        dpg.add_plot_axis(dpg.mvXAxis, tag="plot_sat_x", label="time (s)")
+                                                        dpg.add_plot_axis(dpg.mvYAxis, tag="plot_sat_y", label="fraction (0-1)")
+                                                        for i in range(NUM_LEGS):
+                                                            dpg.add_line_series([], [], label=f"Leg {i+1}", parent="plot_sat_y", tag=f"series_sat_{i}")
 
 
     # Responsive sizing initial
@@ -550,9 +678,18 @@ def main():
 
     # ---------------- telemetry buffers ----------------
     MAX_SAMPLES = 300
-    telemetry_t = []
-    telemetry_pitch = []
-    telemetry_z = []
+    t_hist = []
+    x_hist  = []
+    y_hist  = []
+    roll_hist  = []
+    pitch_hist = []
+    yaw_hist   = []
+    z_hist     = []
+
+    legs_hist = [[] for _ in range(NUM_LEGS)]
+    vel_hist  = [[] for _ in range(NUM_LEGS)]
+    acc_hist  = [[] for _ in range(NUM_LEGS)]
+    sat_hist  = [[] for _ in range(NUM_LEGS)]
 
     # ---------------- simple 3D projection helpers ----------------
     def rot_y(angle_deg):
@@ -710,16 +847,67 @@ def main():
                             menu = RUNNING
                             dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
 
-                    # Parse actuator extensions: "  M1: 4.500" or "  M1: start=0.5, end=0.6, max=0.7"
+                    # Parse metrics from Arduino logs
+                    # A) Legacy per-motor format: "M1: 4.500" or "M1: start=..., end=..., max=..."
+                    matched_legacy = False
                     for mi in range(NUM_LEGS):
                         prefix = f"M{mi+1}:"
                         if prefix in line:
                             try:
                                 after = line.split(prefix, 1)[1].strip()
                                 val = float(after.split(",")[0].split("=")[-1])
-                                leg_extensions[mi] = val
+                                # clamp to valid range
+                                leg_extensions[mi] = max(LEG_MIN_IN, min(LEG_MAX_IN, val))
+                                matched_legacy = True
                             except (ValueError, IndexError):
                                 pass
+
+                    if matched_legacy:
+                        continue
+
+                    # B) Tagged block formats: <POS_IN>, <MEAS_VEL>, <CMD_VEL_PER_SEC>
+                    # Start of a block
+                    if "<POS_IN>" in line:
+                        finalize_pending()
+                        pending_tag = "POS_IN"
+                        pending_values = []
+                    if "<MEAS_VEL>" in line:
+                        finalize_pending()
+                        pending_tag = "MEAS_VEL"
+                        pending_values = []
+                    if "<CMD_VEL_PER_SEC>" in line:
+                        finalize_pending()
+                        pending_tag = "CMD_VEL_PER_SEC"
+                        pending_values = []
+
+                    # Accumulate numeric values for current block
+                    if pending_tag is not None:
+                        import re
+                        if pending_tag == "POS_IN":
+                            # Capture all numbers on comma-delimited lines, else single plausible value
+                            if "," in line:
+                                nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                                for n in nums:
+                                    val = float(n)
+                                    if LEG_MIN_IN - 0.1 <= val <= LEG_MAX_IN + 0.1:
+                                        pending_values.append(val)
+                            else:
+                                m = re.search(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                                if m:
+                                    val = float(m.group(0))
+                                    if LEG_MIN_IN - 0.1 <= val <= LEG_MAX_IN + 0.1:
+                                        pending_values.append(val)
+                            # If we gathered 6 values, finalize immediately
+                            if len(pending_values) >= NUM_LEGS:
+                                finalize_pending()
+                        else:
+                            # Other tags may include all values on the same line
+                            nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                            if nums:
+                                pending_values.extend(float(n) for n in nums)
+                            # Consume when we have enough values
+                            if len(pending_values) >= NUM_LEGS:
+                                finalize_pending()
 
         # Update top status
         dpg.configure_item("status_serial", default_value=f"Serial: {'CONNECTED' if ser else 'DISCONNECTED'}",
@@ -769,37 +957,100 @@ def main():
             dpg.configure_item(f"leg_{i}_val", default_value=label)
             dpg.bind_item_theme(f"leg_{i}", theme)
 
-        # Update Telemetry buffers and plot
+        # Update Telemetry buffers and plots (Pose + Legs + Snapshot)
         now = time.monotonic()
+
+        # pose
+        roll  = 0.0
+        xval  = joystick.ax_f if joystick.available else 0.0
+        yval  = joystick.ay_f if joystick.available else 0.0
         pitch = joystick.alt_f if joystick.available else 0.0
-        zval = joystick.az_f if joystick.available else 0.0
-        telemetry_t.append(now)
-        telemetry_pitch.append(pitch)
-        telemetry_z.append(zval)
-        if len(telemetry_t) > MAX_SAMPLES:
-            telemetry_t.pop(0)
-            telemetry_pitch.pop(0)
-            telemetry_z.pop(0)
+        yaw   = joystick.yaw_f if joystick.available else 0.0
+        zval  = joystick.az_f if joystick.available else 0.0
+
+        t_hist.append(now)
+        x_hist.append(xval)
+        y_hist.append(yval)
+        roll_hist.append(roll)
+        pitch_hist.append(pitch)
+        yaw_hist.append(yaw)
+        z_hist.append(zval)
+
+        # legs
+        for i in range(NUM_LEGS):
+            legs_hist[i].append(leg_extensions[i])
+
+        # compute velocity, acceleration, saturation fraction
+        if len(t_hist) >= 2:
+            if latest_meas_vel is not None:
+                for i in range(NUM_LEGS):
+                    vel_hist[i].append(latest_meas_vel[i])
+            else:
+                dt = max(1e-6, t_hist[-1] - t_hist[-2])
+                for i in range(NUM_LEGS):
+                    v = (legs_hist[i][-1] - legs_hist[i][-2]) / dt
+                    vel_hist[i].append(v)
+        else:
+            for i in range(NUM_LEGS):
+                vel_hist[i].append(0.0)
+
+        if len(t_hist) >= 3:
+            dt2 = max(1e-6, t_hist[-1] - t_hist[-2])
+            for i in range(NUM_LEGS):
+                a = (vel_hist[i][-1] - vel_hist[i][-2]) / dt2 if len(vel_hist[i]) >= 2 else 0.0
+                acc_hist[i].append(a)
+        else:
+            for i in range(NUM_LEGS):
+                acc_hist[i].append(0.0)
+
+        leg_range = max(1e-6, LEG_MAX_IN - LEG_MIN_IN)
+        for i in range(NUM_LEGS):
+            frac = (leg_extensions[i] - LEG_MIN_IN) / leg_range
+            frac = max(0.0, min(1.0, frac))
+            sat_hist[i].append(frac)
+
+        # trim
+        if len(t_hist) > MAX_SAMPLES:
+            t_hist.pop(0)
+            x_hist.pop(0)
+            y_hist.pop(0)
+            roll_hist.pop(0)
+            pitch_hist.pop(0)
+            yaw_hist.pop(0)
+            z_hist.pop(0)
+            for i in range(NUM_LEGS):
+                legs_hist[i].pop(0)
+                vel_hist[i].pop(0)
+                acc_hist[i].pop(0)
+                sat_hist[i].pop(0)
+
         # normalize time to start at 0
-        if telemetry_t:
-            t0 = telemetry_t[0]
-            xs = [t - t0 for t in telemetry_t]
-            dpg.set_value("telemetry_series_pitch", [xs, telemetry_pitch])
-            dpg.set_value("telemetry_series_z", [xs, telemetry_z])
+        if t_hist:
+            t0 = t_hist[0]
+            xs = [t - t0 for t in t_hist]
 
-        # Update 3D Stewart platform visualization
-        # ensure drawlist has up-to-date size matching card
-        card_w = dpg.get_item_width("card_3d") or 240
-        card_h = dpg.get_item_height("card_3d") or 240
-        dw = max(120, card_w - (PAD*2 + SCROLL_W))
-        dh = max(120, card_h - (PAD*3 + 40))
-        dpg.configure_item("cube_drawlist", width=dw, height=dh)
+            # A) Pose plot
+            dpg.set_value("series_roll",  [xs, roll_hist])
+            dpg.set_value("series_pitch", [xs, pitch_hist])
+            dpg.set_value("series_yaw",   [xs, yaw_hist])
+            dpg.set_value("series_x",     [xs, x_hist])
+            dpg.set_value("series_y",     [xs, y_hist])
+            dpg.set_value("series_z",     [xs, z_hist])
 
-        tx = (joystick.ax_f if joystick.available else 0.0) * 0.6
-        ty = (joystick.ay_f if joystick.available else 0.0) * 0.6
-        tz = (joystick.az_f if joystick.available else 0.0) * 0.6
-        draw_platform(pitch_deg=pitch, yaw_deg=(joystick.yaw_f if joystick.available else 0.0),
-                  tx=tx, ty=ty, tz=tz)
+            # B) Leg timeseries plot (top tabs)
+            for i in range(NUM_LEGS):
+                dpg.set_value(f"series_leg_{i}", [xs, legs_hist[i]])
+
+            # Bottom-right: Velocity, Acceleration, Saturation %
+            for i in range(NUM_LEGS):
+                dpg.set_value(f"series_vel_{i}", [xs, vel_hist[i]])
+                dpg.set_value(f"series_acc_{i}", [xs, acc_hist[i]])
+                dpg.set_value(f"series_sat_{i}", [xs, sat_hist[i]])
+
+        # C) Snapshot bar chart (instant)
+        dpg.set_value("bars_legs", [[1,2,3,4,5,6], leg_extensions])
+
+        # Bottom-right plots sizing handled in apply_layout()
 
         # Update card labels/text
         if menu == RUNNING and active_preset:

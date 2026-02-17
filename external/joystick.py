@@ -73,16 +73,16 @@ class JoystickBackend:
     def tick(self):
         """
         Called every frame by GUI.
-        Sends J frames ONLY from here.
+        Polls joystick and updates filtered state for the GUI.
+        Sends J frames to serial only when controller is enabled and serial is available.
         """
-        if not self.enabled or not self.available or not self.ser:
-            return
-
-        if time.monotonic() < self.pause_until:
+        # Always require a connected joystick to poll axes
+        if not self.available:
             return
 
         active = False
 
+        # Poll axes regardless of serial/controller state so GUI updates
         if self.dpad_mode:
             hx, hy = self.js.get_hat(0)
             lb = self.js.get_button(4)
@@ -109,12 +109,16 @@ class JoystickBackend:
 
             active = any(abs(v) > 0.05 for v in (ax, ay, az, alt, yaw))
 
+        # Update filtered values for GUI
         self.ax_f += SMOOTH_ALPHA * (ax - self.ax_f)
         self.ay_f += SMOOTH_ALPHA * (ay - self.ay_f)
         self.az_f += SMOOTH_ALPHA * (az - self.az_f)
         self.alt_f += SMOOTH_ALPHA * (alt - self.alt_f)
         self.yaw_f += SMOOTH_ALPHA * (yaw - self.yaw_f)
 
+        # Only send serial frames when controller is enabled, not paused, and serial available
+        if not self.enabled or time.monotonic() < self.pause_until or not self.ser:
+            return
         if not active:
             return
 
