@@ -17,26 +17,37 @@ import dearpygui.dearpygui as dpg
 BAUD_RATE = 115200
 MAX_LOG_LINES = 2000
 
-# ---------------- dashboard theme (dark + red accent) ----------------
-COL_BG = (12, 14, 20)
-COL_TOPBAR = (16, 18, 26)
-COL_SIDEBAR = (16, 18, 26)
-COL_CARD = (20, 24, 34)
-COL_CARD_2 = (24, 29, 41)
-COL_BORDER = (40, 48, 66)
-COL_TEXT = (235, 240, 250)
-COL_MUTED = (150, 160, 180)
-COL_ACCENT = (235, 55, 78)
-COL_ACCENT_HOVER = (255, 85, 105)
-COL_GOOD = (70, 220, 170)
-COL_WARN = (255, 185, 70)
-COL_BAD = (255, 90, 100)
+# ---------------- charcoal + dark red theme ----------------
+# Charcoal base (neutral, low-blue)
+COL_BG        = (10, 10, 12)
+COL_TOPBAR    = (14, 14, 17)
+COL_SIDEBAR   = (14, 14, 17)
+
+# Cards (slightly lifted charcoal)
+COL_CARD      = (18, 18, 22)
+COL_CARD_2    = (22, 22, 27)
+
+# Borders/separators (dim warm gray)
+COL_BORDER    = (48, 48, 56)
+
+# Text
+COL_TEXT      = (235, 235, 240)
+COL_MUTED     = (160, 160, 170)
+
+# Accent (dark red)
+COL_ACCENT        = (155, 26, 44)
+COL_ACCENT_HOVER  = (185, 34, 56)
+COL_BAD           = (210, 55, 70)
+COL_WARN          = (230, 165, 80)
+COL_GOOD          = (85, 200, 160)
 
 SIDEBAR_W = 240
 SIDEBAR_PAD = 24
 TOPBAR_H = 52
-PAD = 20
+PAD = 5
 LEFT_MARGIN = 30
+RIGHT_MARGIN = 30
+SCROLL_W = 16  # extra right padding to avoid scrollbar overlap
 
 # Pose display ranges
 TRANS_RANGE = 1.0    # joystick axis range (-1..+1)
@@ -131,9 +142,27 @@ def main():
     with dpg.theme() as theme_global:
         with dpg.theme_component(dpg.mvAll):
             dpg.add_theme_color(dpg.mvThemeCol_WindowBg, COL_BG)
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, COL_CARD)
             dpg.add_theme_color(dpg.mvThemeCol_PopupBg, COL_CARD)
+
             dpg.add_theme_color(dpg.mvThemeCol_Text, COL_TEXT)
+            dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, (120, 120, 130))
+
             dpg.add_theme_color(dpg.mvThemeCol_Border, COL_BORDER)
+            dpg.add_theme_color(dpg.mvThemeCol_Separator, COL_BORDER)
+            dpg.add_theme_color(dpg.mvThemeCol_SeparatorHovered, COL_ACCENT_HOVER)
+            dpg.add_theme_color(dpg.mvThemeCol_SeparatorActive, COL_ACCENT)
+
+            # make widgets charcoal instead of blue-gray
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (26, 26, 32))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (32, 32, 40))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (36, 36, 46))
+
+            # optional: scrollbars more subtle
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (12, 12, 16))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (46, 46, 54))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, (60, 60, 70))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, (75, 75, 90))
             dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 6)
             dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
             dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 6)
@@ -159,7 +188,7 @@ def main():
         with dpg.theme_component(dpg.mvChildWindow):
             dpg.add_theme_color(dpg.mvThemeCol_ChildBg, COL_CARD)
             dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, PAD, PAD)
-            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 6)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 8)
 
     with dpg.theme() as theme_card_inner:
         with dpg.theme_component(dpg.mvChildWindow):
@@ -177,9 +206,9 @@ def main():
 
     with dpg.theme() as theme_btn_sidebar:
         with dpg.theme_component(dpg.mvButton):
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (255, 255, 255, 8))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (255, 255, 255, 20))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (255, 255, 255, 30))
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (255, 255, 255, 10))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (255, 255, 255, 18))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (255, 255, 255, 26))
             dpg.add_theme_color(dpg.mvThemeCol_Text, COL_TEXT)
             dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
 
@@ -192,7 +221,7 @@ def main():
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 3)
         return t
 
-    theme_bar_accent = _bar_theme(COL_ACCENT)
+    theme_bar_accent = _bar_theme((135, 22, 40))
     theme_bar_good = _bar_theme(COL_GOOD)
     theme_bar_warn = _bar_theme(COL_WARN)
     theme_bar_bad = _bar_theme(COL_BAD)
@@ -205,7 +234,7 @@ def main():
 
     def apply_layout():
         w, h = viewport_size()
-        aw = w - LEFT_MARGIN  # available width after left margin
+        aw = w - LEFT_MARGIN - RIGHT_MARGIN  # available width after left & right margins
         dpg.configure_item("root", width=aw, height=h)
         dpg.configure_item("topbar", width=aw, height=TOPBAR_H)
         dpg.configure_item("main_area", width=aw, height=h - TOPBAR_H)
@@ -216,6 +245,9 @@ def main():
 
         dpg.configure_item("sidebar", width=SIDEBAR_W, height=content_h)
         dpg.configure_item("content", width=content_w, height=content_h)
+        # ensure telemetry keeps a fixed height so 3D fills remaining space
+        if dpg.does_item_exist("card_telemetry"):
+            dpg.configure_item("card_telemetry", height=320)
 
     def on_viewport_resize(sender, app_data):
         apply_layout()
@@ -299,12 +331,12 @@ def main():
 
                             with dpg.table_row():
                                 # --- Pose Display ---
-                                with dpg.child_window(tag="card_pose", border=False, height=230):
+                                with dpg.child_window(tag="card_pose", border=False, height=260):
                                     dpg.bind_item_theme("card_pose", theme_card)
                                     dpg.add_spacer(height=PAD)
                                     with dpg.group(indent=PAD):
                                         dpg.add_text("Platform Pose", color=COL_MUTED)
-                                        dpg.add_spacer(height=6)
+                                        dpg.add_spacer(height=3)
 
                                         pose_axes = [
                                             ("pose_roll",  "Roll"),
@@ -319,12 +351,12 @@ def main():
                                                 dpg.add_text(f"{ax_label:>5s}", color=COL_MUTED)
                                                 dpg.add_spacer(width=6)
                                                 bar = dpg.add_progress_bar(tag=ax_tag, default_value=0.5,
-                                                                           overlay="0.0", width=-(PAD + 60))
+                                                                           overlay="0.0", width=-(PAD + 60 + SCROLL_W))
                                                 dpg.bind_item_theme(bar, theme_bar_accent)
                                                 dpg.add_text("", tag=f"{ax_tag}_val", color=COL_TEXT)
 
                                 # --- Actuator Status ---
-                                with dpg.child_window(tag="card_legs", border=False, height=230):
+                                with dpg.child_window(tag="card_legs", border=False, height=260):
                                     dpg.bind_item_theme("card_legs", theme_card)
                                     dpg.add_spacer(height=PAD)
                                     with dpg.group(indent=PAD):
@@ -336,53 +368,73 @@ def main():
                                                 dpg.add_text(f"Leg {i+1}", color=COL_MUTED)
                                                 dpg.add_spacer(width=4)
                                                 bar = dpg.add_progress_bar(tag=f"leg_{i}", default_value=0.0,
-                                                                           overlay="--", width=-(PAD + 60))
+                                                                           overlay="--", width=-(PAD + 60 + SCROLL_W))
                                                 dpg.bind_item_theme(bar, theme_bar_good)
                                                 dpg.add_text("", tag=f"leg_{i}_val", color=COL_TEXT)
 
                         dpg.add_spacer(height=6)
 
-                        # ===== Row 2: Log + Controls =====
+                        # ===== Row 2: Log + (Telemetry over 3D) =====
                         with dpg.table(header_row=False, resizable=False, policy=dpg.mvTable_SizingStretchProp,
                                        borders_innerV=False, borders_outerV=False, borders_innerH=False, borders_outerH=False):
 
-                            dpg.add_table_column(init_width_or_weight=2)
-                            dpg.add_table_column(init_width_or_weight=1)
+                            dpg.add_table_column(init_width_or_weight=2)  # log
+                            dpg.add_table_column(init_width_or_weight=1)  # right stack
 
                             with dpg.table_row():
-                                # --- Arduino Log Card ---
-                                with dpg.child_window(tag="card_log", border=False, height=-1):
-                                    dpg.bind_item_theme("card_log", theme_card)
-                                    dpg.add_spacer(height=PAD)
-                                    with dpg.group(indent=PAD):
-                                        with dpg.group(horizontal=True):
-                                            dpg.add_text("Arduino Log", color=COL_TEXT)
-                                            dpg.add_spacer(width=10)
-                                            dpg.add_text(tag="running_label", default_value="", color=COL_GOOD)
+                                # LEFT CELL: Log
+                                with dpg.table_cell():
+                                    with dpg.child_window(tag="card_log", border=False, height=-1):
+                                        dpg.bind_item_theme("card_log", theme_card)
+                                        dpg.add_spacer(height=PAD)
+                                        with dpg.group(indent=PAD):
+                                            with dpg.group(horizontal=True):
+                                                dpg.add_text("Arduino Log", color=COL_TEXT)
+                                                dpg.add_spacer(width=10)
+                                                dpg.add_text(tag="running_label", default_value="", color=COL_GOOD)
 
-                                        dpg.add_spacer(height=8)
-                                        dpg.add_separator()
-                                        dpg.add_spacer(height=10)
+                                            dpg.add_spacer(height=8)
+                                            dpg.add_separator()
+                                            dpg.add_spacer(height=10)
 
-                                        with dpg.child_window(tag="log_box", border=False, height=-1):
-                                            dpg.bind_item_theme("log_box", theme_card_inner)
-                                            dpg.add_text(tag="arduino_log_text", default_value="", color=COL_MUTED)
+                                            with dpg.child_window(tag="log_box", border=False, height=-1):
+                                                dpg.bind_item_theme("log_box", theme_card_inner)
+                                                dpg.add_text(tag="arduino_log_text", default_value="", color=COL_MUTED)
 
-                                # --- Controls Card ---
-                                with dpg.child_window(tag="card_controls", border=False, height=-1):
-                                    dpg.bind_item_theme("card_controls", theme_card)
-                                    dpg.add_spacer(height=PAD)
-                                    with dpg.group(indent=PAD):
-                                        with dpg.group(horizontal=True):
-                                            dpg.add_text("Controls", color=COL_TEXT)
-                                            dpg.add_spacer(width=10)
-                                            dpg.add_text(tag="mode_label", default_value="", color=COL_ACCENT)
+                                # RIGHT CELL: stack Telemetry + 3D
+                                with dpg.table_cell():
+                                    with dpg.group():
+                                        # Telemetry (fixed height)
+                                        with dpg.child_window(tag="card_telemetry", border=False, height=260):
+                                            dpg.bind_item_theme("card_telemetry", theme_card)
+                                            dpg.add_spacer(height=PAD)
+                                            with dpg.group(indent=PAD):
+                                                dpg.add_text("Telemetry", color=COL_TEXT)
+                                                dpg.add_spacer(height=8)
+                                                dpg.add_separator()
+                                                dpg.add_spacer(height=10)
 
-                                        dpg.add_spacer(height=8)
-                                        dpg.add_separator()
-                                        dpg.add_spacer(height=10)
+                                                with dpg.plot(tag="telemetry_plot", height=180, width=-(SCROLL_W + PAD)):
+                                                    dpg.add_plot_legend()
+                                                    dpg.add_plot_axis(dpg.mvXAxis, tag="telemetry_x", label="time (s)")
+                                                    dpg.add_plot_axis(dpg.mvYAxis, tag="telemetry_y", label="value")
+                                                    dpg.add_line_series([], [], label="Pitch (deg)", parent="telemetry_y", tag="telemetry_series_pitch")
+                                                    dpg.add_line_series([], [], label="Z (norm)", parent="telemetry_y", tag="telemetry_series_z")
 
-                                        dpg.add_text(tag="controls_text", default_value="", color=COL_MUTED)
+                                        dpg.add_spacer(height=6)
+
+                                        # 3D (fills remaining space in the right cell)
+                                        with dpg.child_window(tag="card_3d", border=False, height=-1):
+                                            dpg.bind_item_theme("card_3d", theme_card)
+                                            dpg.add_spacer(height=PAD)
+                                            with dpg.group(indent=PAD):
+                                                dpg.add_text("Platform Visualization", color=COL_TEXT)
+                                                dpg.add_spacer(height=8)
+                                                dpg.add_separator()
+                                                dpg.add_spacer(height=10)
+
+                                                with dpg.drawlist(width=300, height=220, tag="cube_drawlist"):
+                                                    pass
 
 
     # Responsive sizing initial
@@ -496,39 +548,130 @@ def main():
 
     rebuild_buttons()
 
-    def build_controls_text():
-        if not joystick.available:
-            return (
-                "Connect a joystick to enable controller shortcuts.\n\n"
-                "A: Enable controller\n"
-                "B: Stop\n"
-                "X: Center\n"
-                "Y: Run demo"
-            )
-        if joystick.dpad_mode:
-            lines = [
-                "D-Pad: Move X/Y position",
-                "LB/RB: Move Z (up/down)",
-                "",
-                "A: Enable controller",
-                "B: Stop movement",
-                "X: Center platform",
-                "Y: Run demo",
-            ]
-        else:
-            lines = [
-                "Left Stick: Move X/Y position",
-                "Right Stick UP: Tilt FORWARD (10°)",
-                "Right Stick DOWN: Tilt BACK (10°)",
-                "Right Stick LEFT: Tilt LEFT (10°)",
-                "Right Stick RIGHT: Tilt RIGHT (10°)",
-                "",
-                "A: Enable controller",
-                "B: Stop movement",
-                "X: Center platform",
-                "Y: Run demo",
-            ]
-        return "\n".join(lines)
+    # ---------------- telemetry buffers ----------------
+    MAX_SAMPLES = 300
+    telemetry_t = []
+    telemetry_pitch = []
+    telemetry_z = []
+
+    # ---------------- simple 3D projection helpers ----------------
+    def rot_y(angle_deg):
+        import math
+        a = math.radians(angle_deg)
+        c, s = math.cos(a), math.sin(a)
+        return [[c, 0, s], [0, 1, 0], [-s, 0, c]]
+
+    def rot_x(angle_deg):
+        import math
+        a = math.radians(angle_deg)
+        c, s = math.cos(a), math.sin(a)
+        return [[1, 0, 0], [0, c, -s], [0, s, c]]
+
+    def rot_z(angle_deg):
+        import math
+        a = math.radians(angle_deg)
+        c, s = math.cos(a), math.sin(a)
+        return [[c, -s, 0], [s, c, 0], [0, 0, 1]]
+
+    def mat_mul_vec(m, v):
+        return [m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
+                m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
+                m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2]]
+
+    def project_point(px, py, w, h, p, scale=100, z_cam=3.0):
+        # simple perspective projection onto drawlist
+        import math
+        x, y, z = p
+        z += z_cam
+        f = scale / max(0.1, z)
+        sx = px + w*0.5 + x * f
+        sy = py + h*0.5 - y * f
+        return sx, sy
+
+    def hex_points(radius, z):
+        import math
+        pts = []
+        for i in range(6):
+            ang = math.pi/3 * i
+            pts.append([radius*math.cos(ang), radius*math.sin(ang), z])
+        return pts
+
+    def draw_platform(pitch_deg, yaw_deg, tx, ty, tz):
+        # geometry
+        r_base = 1.0
+        r_top = 0.9
+        base_z = 0.0
+        top_h = 1.1 + tz  # z translation moves top plate up/down
+
+        base = hex_points(r_base, base_z)
+        top = hex_points(r_top, top_h)
+
+        # rotate top plate (pitch about X, yaw about Z)
+        rx = rot_x(pitch_deg)
+        rz = rot_z(yaw_deg)
+        def apply(v):
+            v1 = mat_mul_vec(rx, v)
+            v2 = mat_mul_vec(rz, v1)
+            # apply XY translation
+            return [v2[0] + tx, v2[1] + ty, v2[2]]
+        top_r = [apply(v) for v in top]
+
+        # draw
+        w = dpg.get_item_width("cube_drawlist") or 240
+        h = dpg.get_item_height("cube_drawlist") or 240
+        px = 0
+        py = 0
+        dpg.delete_item("cube_drawlist", children_only=True)
+
+        # frame rect to make widget visible
+        dpg.draw_rectangle((1,1), (max(2,w-2), max(2,h-2)), color=COL_BORDER, thickness=1.0, parent="cube_drawlist")
+
+        # axes for orientation reference
+        origin = [0,0,base_z]
+        axis_len = 0.8
+        axes = {
+            "X": ([axis_len,0,base_z], (200, 100, 255)),
+            "Y": ([0,axis_len,base_z], (100, 255, 200)),
+            "Z": ([0,0,axis_len+base_z], (255, 200, 100)),
+        }
+        for _, (end, col) in axes.items():
+            x1,y1 = project_point(px, py, w, h, origin)
+            x2,y2 = project_point(px, py, w, h, end)
+            dpg.draw_line((x1,y1), (x2,y2), color=col, thickness=2.0, parent="cube_drawlist")
+
+        # base edges
+        for i in range(6):
+            a = base[i]
+            b = base[(i+1) % 6]
+            x1,y1 = project_point(px, py, w, h, a)
+            x2,y2 = project_point(px, py, w, h, b)
+            dpg.draw_line((x1,y1), (x2,y2), color=COL_MUTED, thickness=2.0, parent="cube_drawlist")
+
+        # top edges
+        for i in range(6):
+            a = top_r[i]
+            b = top_r[(i+1) % 6]
+            x1,y1 = project_point(px, py, w, h, a)
+            x2,y2 = project_point(px, py, w, h, b)
+            dpg.draw_line((x1,y1), (x2,y2), color=COL_ACCENT, thickness=2.0, parent="cube_drawlist")
+
+        # legs (color by extension fraction)
+        leg_range = LEG_MAX_IN - LEG_MIN_IN
+        for i in range(6):
+            a = base[i]
+            b = top_r[i]
+            x1,y1 = project_point(px, py, w, h, a)
+            x2,y2 = project_point(px, py, w, h, b)
+            ext = leg_extensions[i]
+            frac = (ext - LEG_MIN_IN) / leg_range if leg_range > 0 else 0.0
+            frac = max(0.0, min(1.0, frac))
+            if frac >= LEG_CRIT:
+                col = COL_BAD
+            elif frac >= LEG_WARN:
+                col = COL_WARN
+            else:
+                col = COL_GOOD
+            dpg.draw_line((x1,y1), (x2,y2), color=col, thickness=2.0, parent="cube_drawlist")
 
     # ---------------- main loop ----------------
     clock = pygame.time.Clock()
@@ -626,17 +769,43 @@ def main():
             dpg.configure_item(f"leg_{i}_val", default_value=label)
             dpg.bind_item_theme(f"leg_{i}", theme)
 
+        # Update Telemetry buffers and plot
+        now = time.monotonic()
+        pitch = joystick.alt_f if joystick.available else 0.0
+        zval = joystick.az_f if joystick.available else 0.0
+        telemetry_t.append(now)
+        telemetry_pitch.append(pitch)
+        telemetry_z.append(zval)
+        if len(telemetry_t) > MAX_SAMPLES:
+            telemetry_t.pop(0)
+            telemetry_pitch.pop(0)
+            telemetry_z.pop(0)
+        # normalize time to start at 0
+        if telemetry_t:
+            t0 = telemetry_t[0]
+            xs = [t - t0 for t in telemetry_t]
+            dpg.set_value("telemetry_series_pitch", [xs, telemetry_pitch])
+            dpg.set_value("telemetry_series_z", [xs, telemetry_z])
+
+        # Update 3D Stewart platform visualization
+        # ensure drawlist has up-to-date size matching card
+        card_w = dpg.get_item_width("card_3d") or 240
+        card_h = dpg.get_item_height("card_3d") or 240
+        dw = max(120, card_w - (PAD*2 + SCROLL_W))
+        dh = max(120, card_h - (PAD*3 + 40))
+        dpg.configure_item("cube_drawlist", width=dw, height=dh)
+
+        tx = (joystick.ax_f if joystick.available else 0.0) * 0.6
+        ty = (joystick.ay_f if joystick.available else 0.0) * 0.6
+        tz = (joystick.az_f if joystick.available else 0.0) * 0.6
+        draw_platform(pitch_deg=pitch, yaw_deg=(joystick.yaw_f if joystick.available else 0.0),
+                  tx=tx, ty=ty, tz=tz)
+
         # Update card labels/text
         if menu == RUNNING and active_preset:
             dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
         else:
             dpg.configure_item("running_label", default_value="")
-
-        mode_label = "MODE: D-PAD (discrete positions)" if joystick.available and joystick.dpad_mode else \
-                     ("MODE: ANALOG (continuous + directional tilt)" if joystick.available else "MODE: —")
-        dpg.configure_item("mode_label", default_value=mode_label)
-
-        dpg.configure_item("controls_text", default_value=build_controls_text())
         dpg.configure_item("arduino_log_text", default_value="\n".join(arduino_log))
         dpg.set_y_scroll("log_box", dpg.get_y_scroll_max("log_box"))
 
