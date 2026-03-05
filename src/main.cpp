@@ -293,28 +293,53 @@ void loop() {
 }
 
 inline void doCenter() {
-  Serial.println("Centering...");
-  stop_requested = false;
+    Serial.println("Centering...");
+    stop_requested = false;
 
-  setMotorsEnabled(true);
+    setMotorsEnabled(true);
 
-  // Faster center: reduce duration from 3.0s to 1.0s
-  moveplat(2.0f, zero_length, T0, T0, R0, R0);
+    moveplat(2.0f, zero_length, T0, T0, R0, R0);
 
-  T_cur[0] = 0;
-  T_cur[1] = 0;
-  T_cur[2] = 2.0f;
-  R_cur = Quaternion(1, 0, 0, 0);
+    T_cur[0] = 0;
+    T_cur[1] = 0;
+    T_cur[2] = 2.0f;
+    R_cur = Quaternion(1, 0, 0, 0);
 
-  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-    analogWrite(PWM_PINS[m], 0);
-  }
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        analogWrite(PWM_PINS[m], 0);
+    }
 
-  setMotorsEnabled(false);
-  centered = true;
-  mode = MODE_IDLE;
+    setMotorsEnabled(false);
+    centered = true;
+    mode = MODE_IDLE;
 
-  Serial.println("Centered. Motors disabled.");
+    // Capture centered pot readings as zero reference
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        ZERO_POS[m] = getAverageReading(m);
+    }
+
+    // Print new zero references for debugging
+    Serial.println("Zero references captured:");
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print("  M"); Serial.print(m + 1);
+        Serial.print(": "); Serial.println(ZERO_POS[m]);
+    }
+
+    Serial.println("Pot check (3 samples, 200ms apart):");
+for (int s = 0; s < 3; s++) {
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print("  M"); Serial.print(m + 1);
+        Serial.print(": "); Serial.print(getAverageReading(m));
+        Serial.print("  ");
+    }
+    Serial.println();
+    delay(200);
+}
+
+    Serial.print("ZERO_LEN: ");
+    Serial.println(zero_length, 3);
+
+    Serial.println("Centered. Motors disabled.");
 }
 
 // Text commands: center/start/controller/stop
@@ -409,11 +434,13 @@ void checkTextCommands() {
 // Math computations
 inline int getAverageReading(uint8_t motor)
 {
-  reading_sum = 0;
-  for (reading = 0; reading < NUM_READINGS; ++reading) {
-    reading_sum += analogRead(POT_PINS[motor]);
-  }
-  return reading_sum / NUM_READINGS;
+    reading_sum = 0;
+    for (reading = 0; reading < NUM_READINGS; ++reading) {
+        reading_sum += analogRead(POT_PINS[motor]);
+    }
+    int raw = reading_sum / NUM_READINGS;
+    if (motor == 5) return ZERO_POS[5];
+    return raw;
 }
 
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {

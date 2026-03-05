@@ -13,10 +13,13 @@ from serial.tools import list_ports
 import pygame
 from joystick import JoystickBackend
 import dearpygui.dearpygui as dpg
+import re
+
 
 BAUD_RATE = 115200
 MAX_LOG_LINES = 2000
 
+last_reconnect_attampt = 0.0
 # ---------------- charcoal + dark red theme ----------------
 # Charcoal base (neutral, low-blue)
 COL_BG        = (10, 10, 12)
@@ -100,10 +103,19 @@ def main():
     controller_mode = False
 
     def send_command(cmd: str):
-        nonlocal controller_mode
+        nonlocal controller_mode, ser
         if ser:
-            ser.write((cmd + "\n").encode())
-            print(f">>> SENT: {cmd}")
+            try:
+                ser.write((cmd + "\n").encode())
+                print(f">>> SENT: {cmd}")
+            except Exception as e:
+                print(f"[Serial] Write failed: {e} — port disconnected")
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                ser = None
+
 
         if cmd == "controller":
             controller_mode = True
@@ -121,8 +133,10 @@ def main():
     MAIN, START_MENU, PRESETS, RUNNING = "main", "start", "presets", "running"
     menu = MAIN
     active_preset = None
+    last_reconnect_attempt = 0.0
     waiting_for_center = False
     arduino_log: list[str] = []
+    serial_buf = ""
     leg_extensions: list[float] = [0.0] * NUM_LEGS  # inches
     # Serial parsing state for multi-line metric blocks
     pending_tag: str | None = None
@@ -825,89 +839,118 @@ def main():
 
         # Serial feedback
         if ser:
-            try:
-                waiting = ser.in_waiting
-            except Exception:
-                waiting = 0
-            if waiting:
-                lines = ser.read(waiting).decode(errors="replace").splitlines()
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    print("[ARDUINO]", line)
-                    arduino_log.append(line)
-                    if len(arduino_log) > MAX_LOG_LINES:
-                        arduino_log.pop(0)
+                try:
+                    waiting = ser.in_waiting
+                except Exception as e:
+                    print(f"[Serial] Port lost: {e}")
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    ser = None
+                    waiting = 0
 
-                    if waiting_for_center and "Centered. Motors disabled." in line:
-                        waiting_for_center = False
-                        if active_preset:
-                            send_command(f"start {active_preset}")
-                            menu = RUNNING
-                            dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
+                if waiting:
+                    serial_buf += ser.read(waiting).decode(errors="replace")
 
-                    # Parse metrics from Arduino logs
-                    # A) Legacy per-motor format: "M1: 4.500" or "M1: start=..., end=..., max=..."
-                    matched_legacy = False
-                    for mi in range(NUM_LEGS):
-                        prefix = f"M{mi+1}:"
-                        if prefix in line:
-                            try:
-                                after = line.split(prefix, 1)[1].strip()
-                                val = float(after.split(",")[0].split("=")[-1])
-                                # clamp to valid range
-                                leg_extensions[mi] = max(LEG_MIN_IN, min(LEG_MAX_IN, val))
-                                matched_legacy = True
-                            except (ValueError, IndexError):
-                                pass
+                if ser:
+                    while "\n" in serial_buf:
+                        line, serial_buf = serial_buf.split("\n", 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        print("[ARDUINO]", line)
+                        arduino_log.append(line)
+                        if len(arduino_log) > MAX_LOG_LINES:
+                            arduino_log.pop(0)
 
-                    if matched_legacy:
-                        continue
+                        if waiting_for_center and "Centered. Motors disabled." in line:
+                            waiting_for_center = False
+                            if active_preset:
+                                send_command(f"start {active_preset}")
+                                menu = RUNNING
+                                dpg.configure_item("running_label", default_value=f"RUNNING: {active_preset.upper()}")
 
-                    # B) Tagged block formats: <POS_IN>, <MEAS_VEL>, <CMD_VEL_PER_SEC>
-                    # Start of a block
-                    if "<POS_IN>" in line:
-                        finalize_pending()
-                        pending_tag = "POS_IN"
-                        pending_values = []
-                    if "<MEAS_VEL>" in line:
-                        finalize_pending()
-                        pending_tag = "MEAS_VEL"
-                        pending_values = []
-                    if "<CMD_VEL_PER_SEC>" in line:
-                        finalize_pending()
-                        pending_tag = "CMD_VEL_PER_SEC"
-                        pending_values = []
+                        # Parse metrics from Arduino logs
+                        # A) Legacy per-motor format: "M1: 4.500" or "M1: start=..., end=..., max=..."
+                        matched_legacy = False
+                        for mi in range(NUM_LEGS):
+                            prefix = f"M{mi+1}:"
+                            if prefix in line:
+                                try:
+                                    after = line.split(prefix, 1)[1].strip()
+                                    val = float(after.split(",")[0].split("=")[-1])
+                                    # clamp to valid range
+                                    leg_extensions[mi] = max(LEG_MIN_IN, min(LEG_MAX_IN, val))
+                                    matched_legacy = True
+                                except (ValueError, IndexError):
+                                    pass
 
-                    # Accumulate numeric values for current block
-                    if pending_tag is not None:
-                        import re
-                        if pending_tag == "POS_IN":
-                            # Capture all numbers on comma-delimited lines, else single plausible value
-                            if "," in line:
-                                nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", line)
-                                for n in nums:
-                                    val = float(n)
-                                    if LEG_MIN_IN - 0.1 <= val <= LEG_MAX_IN + 0.1:
-                                        pending_values.append(val)
+                        if matched_legacy:
+                            continue
+
+                        # B) Tagged block formats: <POS_IN>, <MEAS_VEL>, <CMD_VEL_PER_SEC>
+                        # Start of a block
+                        if "<POS_IN>" in line:
+                            finalize_pending()
+                            pending_tag = "POS_IN"
+                            pending_values = []
+                        if "<MEAS_VEL>" in line:
+                            finalize_pending()
+                            pending_tag = "MEAS_VEL"
+                            pending_values = []
+                        if "<CMD_VEL_PER_SEC>" in line:
+                            finalize_pending()
+                            pending_tag = "CMD_VEL_PER_SEC"
+                            pending_values = []
+
+                        # Accumulate numeric values for current block
+                        if pending_tag is not None:
+                            if pending_tag == "POS_IN":
+                                # Capture all numbers on comma-delimited lines, else single plausible value
+                                if "," in line:
+                                    nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                                    for n in nums:
+                                        val = float(n)
+                                        if LEG_MIN_IN - 0.1 <= val <= LEG_MAX_IN + 0.1:
+                                            pending_values.append(val)
+                                else:
+                                    m = re.search(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                                    if m:
+                                        val = float(m.group(0))
+                                        if LEG_MIN_IN - 0.1 <= val <= LEG_MAX_IN + 0.1:
+                                            pending_values.append(val)
+                                # If we gathered 6 values, finalize immediately
+                                if len(pending_values) >= NUM_LEGS:
+                                    finalize_pending()
                             else:
-                                m = re.search(r"[-+]?(?:\d*\.\d+|\d+)", line)
-                                if m:
-                                    val = float(m.group(0))
-                                    if LEG_MIN_IN - 0.1 <= val <= LEG_MAX_IN + 0.1:
-                                        pending_values.append(val)
-                            # If we gathered 6 values, finalize immediately
-                            if len(pending_values) >= NUM_LEGS:
-                                finalize_pending()
-                        else:
-                            # Other tags may include all values on the same line
-                            nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", line)
-                            if nums:
-                                pending_values.extend(float(n) for n in nums)
-                            # Consume when we have enough values
-                            if len(pending_values) >= NUM_LEGS:
-                                finalize_pending()
+                                # Other tags may include all values on the same line
+                                nums = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                                if nums:
+                                    pending_values.extend(float(n) for n in nums)
+                                # Consume when we have enough values
+                                if len(pending_values) >= NUM_LEGS:
+                                    finalize_pending()
+
+        # Auto-reconnect if disconnected
+        if not ser:
+            now_r = time.monotonic()
+            if now_r - last_reconnect_attempt > 3.0:  # try every 3 seconds
+                last_reconnect_attempt = now_r
+                reconnect_port = detect_serial_port()
+                if reconnect_port:
+                    try:
+                        ser = serial.Serial(reconnect_port, BAUD_RATE, timeout=0)
+                        time.sleep(0.5)
+                        try:
+                            ser.reset_input_buffer()
+                        except Exception:
+                            pass
+                        serial_buf = ""
+                        print(f"[Serial] Reconnected on {reconnect_port}")
+                    except Exception as e:
+                        print(f"[Serial] Reconnect failed: {e}")
+                        ser = None
 
         # Update top status
         dpg.configure_item("status_serial", default_value=f"Serial: {'CONNECTED' if ser else 'DISCONNECTED'}",
