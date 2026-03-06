@@ -8,6 +8,11 @@
 #define NUM_LEDS  32
 #define LED_PIN   8
 
+#define FAN_PIN_1  11
+#define FAN_PIN_2  12
+#define FAN_PIN_3  18
+#define FAN_PIN_4  19
+
 CRGB leds[NUM_LEDS];
 
 // Actuator variables 
@@ -89,6 +94,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 void setMotorsEnabled(bool en);
 void stopThisHoe();
 void stopMotors();
+void setFans(bool on);
 
 void checkTextCommands();
 void updateJoystickInputFlag();
@@ -257,6 +263,12 @@ void setup() {
   R2 = azi_alt_to_rot(90.0, 10.0);
   R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
 
+  pinMode(FAN_PIN_1, OUTPUT);
+  pinMode(FAN_PIN_2, OUTPUT);
+  pinMode(FAN_PIN_3, OUTPUT);
+  pinMode(FAN_PIN_4, OUTPUT);
+  setFans(true);
+
   FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
   FastLED.setBrightness(80);
 
@@ -268,6 +280,13 @@ void setup() {
   FastLED.show();
 
   Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
+}
+
+void setFans(bool on) {
+  digitalWrite(FAN_PIN_1, on ? HIGH : LOW);
+  digitalWrite(FAN_PIN_2, on ? HIGH : LOW);
+  digitalWrite(FAN_PIN_3, on ? HIGH : LOW);
+  digitalWrite(FAN_PIN_4, on ? HIGH : LOW);
 }
 
 void updateLEDs() {
@@ -283,7 +302,7 @@ void updateLEDs() {
   } else if (mode == MODE_CONTROLLER) {
     color = CRGB::Yellow;
   } else {
-    color = centered ? CRGB::Blue : CRGB(30, 30, 30);  // dim white = not yet centered
+    color = centered ? CRGB::Blue : CRGB::Green;
   }
   fill_solid(leds, NUM_LEDS, color);
   FastLED.show();
