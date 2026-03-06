@@ -1,8 +1,14 @@
 #include <Arduino.h>
 #include <math.h>
+#include <FastLED.h>
 #include "pin_layout.h"
 #include "Quaternion.h"
 #include "platform.h"
+
+#define NUM_LEDS  32
+#define LED_PIN   8
+
+CRGB leds[NUM_LEDS];
 
 // Actuator variables 
 uint8_t pwm_cmd[NUM_MOTORS];
@@ -217,7 +223,7 @@ void runPreset(PresetID p) {
 void setup() {
   Serial.begin(BAUD_RATE);
   Serial.setTimeout(30);
-  while (!Serial) {}
+  while (!Serial && millis() < 3000) {}
 
   // Pins
   for (motor = 0; motor < NUM_MOTORS; ++motor) {
@@ -251,7 +257,36 @@ void setup() {
   R2 = azi_alt_to_rot(90.0, 10.0);
   R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
 
+  FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
+  FastLED.setBrightness(80);
+
+  // Startup test: flash red so we know the strip is alive
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+  delay(500);
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
+
   Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
+}
+
+void updateLEDs() {
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate < 50) return;  // ~20Hz max
+  lastUpdate = millis();
+
+  CRGB color;
+  if (stop_requested) {
+    color = CRGB::Red;
+  } else if (mode == MODE_SCRIPT) {
+    color = CRGB::Green;
+  } else if (mode == MODE_CONTROLLER) {
+    color = CRGB::Yellow;
+  } else {
+    color = centered ? CRGB::Blue : CRGB(30, 30, 30);  // dim white = not yet centered
+  }
+  fill_solid(leds, NUM_LEDS, color);
+  FastLED.show();
 }
 
 // Loop
@@ -289,6 +324,7 @@ void loop() {
     Serial.println("Preset complete. Motors disabled.");
   }
 
+  updateLEDs();
   delay(2);
 }
 
