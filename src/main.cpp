@@ -5,7 +5,7 @@
 #include "Quaternion.h"
 #include "platform.h"
 
-#define NUM_LEDS  32
+#define NUM_LEDS  96
 #define LED_PIN   8
 
 #define FAN_PIN_1  11
@@ -291,20 +291,13 @@ void setFans(bool on) {
 
 void updateLEDs() {
   static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate < 50) return;  // ~20Hz max
+  if (millis() - lastUpdate < 20) return;  // ~50Hz
   lastUpdate = millis();
 
-  CRGB color;
-  if (stop_requested) {
-    color = CRGB::Red;
-  } else if (mode == MODE_SCRIPT) {
-    color = CRGB::Green;
-  } else if (mode == MODE_CONTROLLER) {
-    color = CRGB::Yellow;
-  } else {
-    color = centered ? CRGB::Blue : CRGB::Green;
-  }
-  fill_solid(leds, NUM_LEDS, color);
+  static uint8_t hue = 0;
+  hue += 4;  // speed of rainbow cycle
+
+  fill_rainbow(leds, NUM_LEDS, hue, 255 / NUM_LEDS);
   FastLED.show();
 }
 
