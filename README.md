@@ -146,6 +146,10 @@ Commands must be followed by pressing Enter.
 
 ## Available Commands
 
+Run: python gui.py
+
+Serial commands and options in gui.py as buttons
+
 - center  
   Moves the platform to its neutral position, then disables the motors
 
