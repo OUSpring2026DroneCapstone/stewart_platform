@@ -1,3 +1,24 @@
+/*
+ * Platform Control System
+ * Goal: Controls a multi-actuator platform using inverse kinematics.
+ *
+ * Features:
+ * - Motor control (PWM + direction)
+ * - Position tracking via potentiometers
+ * - Preset motion sequences (demo, orbit, wave, etc.)
+ * - Joystick control mode
+ * - Calibration system for actuator limits
+ * - LED feedback + fan control
+ *
+ * Core idea:
+ * Desired platform position (T + rotation) -> actuator lengths -> motor commands
+ *
+ * Main loop handles:
+ * - Serial commands
+ * - Mode switching (idle/script/controller)
+ * - Motion execution
+ */
+
 #include <Arduino.h>
 #include <math.h>
 #include <FastLED.h>
@@ -15,16 +36,16 @@
 
 CRGB leds[NUM_LEDS];
 
-// Actuator variables 
+// Actuator variables (PWM + direction per motor)
 uint8_t pwm_cmd[NUM_MOTORS];
 MotorDirection dir_cmd[NUM_MOTORS];
 
-// Position variables
+// Position variables aka real-world state from sensors (potentiometers)
 int16_t pos[NUM_MOTORS];
 int16_t input[NUM_MOTORS];
 uint16_t desired_pos[NUM_MOTORS];
 
-// Calibration variables 
+// Calibration variables aka target actuator positions computed from kinematics
 int16_t end_readings[NUM_MOTORS];
 int16_t zero_readings[NUM_MOTORS];
 bool calibration_valid;
@@ -118,6 +139,8 @@ void stopMotors() {
   }
 }
 
+// Executes predefined motion patterns by chaining moveplat() calls.
+// Each preset defines a trajectory in 3D space using waypoints.
 void runPreset(PresetID p) {
   switch (p) {
 
@@ -126,6 +149,7 @@ void runPreset(PresetID p) {
     float Z_HIGH;
 
     case PRESET_DEMO:
+      // Simple demo sequence: center -> forward -> right -> left -> back -> up -> center 
       moveplat(dur, zero_length, T0, T1, R0, R0);
       moveplat(dur, zero_length, T1, TX, R0, R0);
       moveplat(dur, zero_length, TX, T1, R0, R0);
@@ -136,7 +160,7 @@ void runPreset(PresetID p) {
 
     case PRESET_FIGURE8:
     {
-      // placeholder for later
+      // Figure-8 motion in XY plane with varying Z height
       Z_LOW  = 1.8f;   // lower at crossover
       Z_HIGH = 2.4f;   // higher at outer lobes
     
@@ -157,7 +181,7 @@ void runPreset(PresetID p) {
 
     case PRESET_ORBIT:
     {
-      
+      // Orbit motion in a circle with 9 waypoints
       Z_LOW  = 1.8f;
       Z_MID  = 2.2f;
       Z_HIGH = 2.6f;
@@ -188,7 +212,8 @@ void runPreset(PresetID p) {
       
     case PRESET_WAVE:
     {
-      
+        // Wave motion in a grid pattern with 8 waypoints, alternating Z height to create a "wave" effect
+        // Forward -> Height increases as it reaches waypoint -> waves such that goes backward at lower point -> slowly climbs back up to backward waypoint
         Z_LOW  = 1.7f;
         Z_MID  = 2.0f;
         Z_HIGH = 2.5f;
@@ -224,14 +249,21 @@ void runPreset(PresetID p) {
   }
 }
 
-
-// Setup
+/*
+ * System initialization:
+ * - Configures all hardware pins (motors, sensors, fans)
+ * - Initializes serial communication for commands
+ * - Computes baseline actuator geometry (zero_length)
+ * - Sets up rotation transforms
+ * - Initializes LED strip and performs startup test
+ */
 void setup() {
+  // Initialize serial interface for command input/output
   Serial.begin(BAUD_RATE);
   Serial.setTimeout(30);
   while (!Serial && millis() < 3000) {}
 
-  // Pins
+  // Configure motor control pins (direction + PWM) and potentiometer inputs
   for (motor = 0; motor < NUM_MOTORS; ++motor) {
     pinMode(DIR_PINS[motor], OUTPUT);
     digitalWrite(DIR_PINS[motor], LOW);
@@ -242,6 +274,7 @@ void setup() {
     pinMode(POT_PINS[motor], INPUT);
   }
 
+  // Disable motors by default for safety (HIGH = disabled)
   pinMode(ENABLE_MOTORS, OUTPUT);
   digitalWrite(ENABLE_MOTORS, HIGH);
 
@@ -250,6 +283,9 @@ void setup() {
   digitalWrite(ENABLE_MOTORS_2, HIGH);
   #endif
 
+  // Compute baseline actuator length at home position (zero_length)
+  // Used as reference for all motion calculations
+
   // zero_length
   for (int i = 0; i < 3; i++) {
     float d = plat_0[i] + plat_1[i] - base_1[i];
@@ -257,7 +293,7 @@ void setup() {
   }
   zero_length = sqrt(zero_length);
 
-  // Rotations
+  // Precompute rotation quaternions for motion control
   R0 = azi_alt_to_rot(0.0, 0.0);
   R1 = azi_alt_to_rot(0.0, 10.0);
   R2 = azi_alt_to_rot(90.0, 10.0);
@@ -267,8 +303,11 @@ void setup() {
   pinMode(FAN_PIN_2, OUTPUT);
   pinMode(FAN_PIN_3, OUTPUT);
   pinMode(FAN_PIN_4, OUTPUT);
+
+  // Initialize cooling fans (always on at startup)
   setFans(true);
 
+  // Initialize LED strip and perform startup test (red flash)
   FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
   FastLED.setBrightness(80);
 
@@ -279,9 +318,11 @@ void setup() {
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
 
+  // System ready for commands via serial
   Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
 }
 
+// Function to control cooling fans, turning on or off based on system state (e.g., on during motion, off when idle)
 void setFans(bool on) {
   digitalWrite(FAN_PIN_1, on ? HIGH : LOW);
   digitalWrite(FAN_PIN_2, on ? HIGH : LOW);
@@ -289,6 +330,7 @@ void setFans(bool on) {
   digitalWrite(FAN_PIN_4, on ? HIGH : LOW);
 }
 
+// Updates LED strip with rainbow pattern. Called continuously in main loop for visual feedback.
 void updateLEDs() {
   static unsigned long lastUpdate = 0;
   if (millis() - lastUpdate < 20) return;  // ~50Hz
@@ -301,7 +343,14 @@ void updateLEDs() {
   FastLED.show();
 }
 
-// Loop
+ /*
+ * Main control loop:
+ * - Always listens for serial commands
+ * - Runs joystick control if in controller mode
+ * - Executes scripted presets if in script mode
+ * - Updates LED feedback continuously
+ */
+
 void loop() {
 
   // Always watch for text commands
@@ -391,6 +440,14 @@ for (int s = 0; s < 3; s++) {
 }
 
 // Text commands: center/start/controller/stop
+
+// Parses incoming serial commands and updates system state.
+// Commands include:
+// - stop        -> halt all motion
+// - center      -> return platform to home position
+// - controller  -> enable joystick control
+// - start <id>  -> run preset motion
+// - calibrate   -> recalibrate actuator limits
 void checkTextCommands() {
   static String buf = "";
 
@@ -503,7 +560,14 @@ inline void moveAll(MotorDirection dir)
   }
 }
 
-
+/*
+ * Calibration routine:
+ * 1. Extend all actuators to safe maximum length
+ * 2. Record end readings (max extension)
+ * 3. Retract to baseline and record zero readings
+ * 4. Validate readings against thresholds
+ * 5. Update calibration constants if valid
+ */
 inline void calibrate()
 {
   // Extend to a configurable safe maximum instead of hard stop
@@ -617,6 +681,19 @@ void lerp(const float pos0[3], const float pos1[3], float t, float T[3]) {
   }
 }
 
+/*
+ * Core motion function:
+ * Interpolates platform position and rotation over time,
+ * computes required actuator lengths using kinematics,
+ * and applies closed-loop control (P controller) to motors.
+ *
+ * Steps:
+ * - Interpolate position + rotation (lerp + slerp)
+ * - Compute actuator lengths from geometry
+ * - Compare with current readings
+ * - Compute velocity command
+ * - Convert to PWM + direction
+ */
 inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1)
 {
   int steps = (int)(duration * 10.0f);
