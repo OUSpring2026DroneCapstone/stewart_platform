@@ -1,8 +1,19 @@
 #include <Arduino.h>
 #include <math.h>
+#include <FastLED.h>
 #include "pin_layout.h"
 #include "Quaternion.h"
 #include "platform.h"
+
+#define NUM_LEDS  96
+#define LED_PIN   8
+
+#define FAN_PIN_1  11
+#define FAN_PIN_2  12
+#define FAN_PIN_3  18
+#define FAN_PIN_4  19
+
+CRGB leds[NUM_LEDS];
 
 // Actuator variables 
 uint8_t pwm_cmd[NUM_MOTORS];
@@ -83,6 +94,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 void setMotorsEnabled(bool en);
 void stopThisHoe();
 void stopMotors();
+void setFans(bool on);
 
 void checkTextCommands();
 void updateJoystickInputFlag();
@@ -217,7 +229,7 @@ void runPreset(PresetID p) {
 void setup() {
   Serial.begin(BAUD_RATE);
   Serial.setTimeout(30);
-  while (!Serial) {}
+  while (!Serial && millis() < 3000) {}
 
   // Pins
   for (motor = 0; motor < NUM_MOTORS; ++motor) {
@@ -251,7 +263,42 @@ void setup() {
   R2 = azi_alt_to_rot(90.0, 10.0);
   R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
 
+  pinMode(FAN_PIN_1, OUTPUT);
+  pinMode(FAN_PIN_2, OUTPUT);
+  pinMode(FAN_PIN_3, OUTPUT);
+  pinMode(FAN_PIN_4, OUTPUT);
+  setFans(true);
+
+  FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
+  FastLED.setBrightness(80);
+
+  // Startup test: flash red so we know the strip is alive
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+  delay(500);
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
+
   Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
+}
+
+void setFans(bool on) {
+  digitalWrite(FAN_PIN_1, on ? HIGH : LOW);
+  digitalWrite(FAN_PIN_2, on ? HIGH : LOW);
+  digitalWrite(FAN_PIN_3, on ? HIGH : LOW);
+  digitalWrite(FAN_PIN_4, on ? HIGH : LOW);
+}
+
+void updateLEDs() {
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate < 20) return;  // ~50Hz
+  lastUpdate = millis();
+
+  static uint8_t hue = 0;
+  hue += 4;  // speed of rainbow cycle
+
+  fill_rainbow(leds, NUM_LEDS, hue, 255 / NUM_LEDS);
+  FastLED.show();
 }
 
 // Loop
@@ -289,32 +336,58 @@ void loop() {
     Serial.println("Preset complete. Motors disabled.");
   }
 
+  updateLEDs();
   delay(2);
 }
 
 inline void doCenter() {
-  Serial.println("Centering...");
-  stop_requested = false;
+    Serial.println("Centering...");
+    stop_requested = false;
 
-  setMotorsEnabled(true);
+    setMotorsEnabled(true);
 
-  // Faster center: reduce duration from 3.0s to 1.0s
-  moveplat(2.0f, zero_length, T0, T0, R0, R0);
+    moveplat(2.0f, zero_length, T0, T0, R0, R0);
 
-  T_cur[0] = 0;
-  T_cur[1] = 0;
-  T_cur[2] = 2.0f;
-  R_cur = Quaternion(1, 0, 0, 0);
+    T_cur[0] = 0;
+    T_cur[1] = 0;
+    T_cur[2] = 2.0f;
+    R_cur = Quaternion(1, 0, 0, 0);
 
-  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-    analogWrite(PWM_PINS[m], 0);
-  }
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        analogWrite(PWM_PINS[m], 0);
+    }
 
-  setMotorsEnabled(false);
-  centered = true;
-  mode = MODE_IDLE;
+    setMotorsEnabled(false);
+    centered = true;
+    mode = MODE_IDLE;
 
-  Serial.println("Centered. Motors disabled.");
+    // Capture centered pot readings as zero reference
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        ZERO_POS[m] = getAverageReading(m);
+    }
+
+    // Print new zero references for debugging
+    Serial.println("Zero references captured:");
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print("  M"); Serial.print(m + 1);
+        Serial.print(": "); Serial.println(ZERO_POS[m]);
+    }
+
+    Serial.println("Pot check (3 samples, 200ms apart):");
+for (int s = 0; s < 3; s++) {
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print("  M"); Serial.print(m + 1);
+        Serial.print(": "); Serial.print(getAverageReading(m));
+        Serial.print("  ");
+    }
+    Serial.println();
+    delay(200);
+}
+
+    Serial.print("ZERO_LEN: ");
+    Serial.println(zero_length, 3);
+
+    Serial.println("Centered. Motors disabled.");
 }
 
 // Text commands: center/start/controller/stop
@@ -409,11 +482,13 @@ void checkTextCommands() {
 // Math computations
 inline int getAverageReading(uint8_t motor)
 {
-  reading_sum = 0;
-  for (reading = 0; reading < NUM_READINGS; ++reading) {
-    reading_sum += analogRead(POT_PINS[motor]);
-  }
-  return reading_sum / NUM_READINGS;
+    reading_sum = 0;
+    for (reading = 0; reading < NUM_READINGS; ++reading) {
+        reading_sum += analogRead(POT_PINS[motor]);
+    }
+    int raw = reading_sum / NUM_READINGS;
+    if (motor == 5) return ZERO_POS[5];
+    return raw;
 }
 
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
@@ -550,6 +625,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
   float Kp = 0.25f;
 
   float start_ext[NUM_MOTORS];
+  
   float end_ext[NUM_MOTORS];
   float max_ext[NUM_MOTORS];
   for (uint8_t m = 0; m < NUM_MOTORS; m++) {
@@ -557,6 +633,12 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     end_ext[m]   = 0.0f;
     max_ext[m]   = -1e9f;
   }
+
+  float prev_length_now[NUM_MOTORS];
+  bool first_sample = true;
+
+  static float vel_filter_state[NUM_MOTORS] = {0};
+
 
   for (int step = 0; step <= steps; step++) {
 
@@ -594,6 +676,11 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     lerp(pos0, pos1, t_next, T_next);
 
     float pwm_local[NUM_MOTORS];
+    float vel_local[NUM_MOTORS];   // store velocity per motor (commanded)
+    float measured_vel_local[NUM_MOTORS];
+    
+    
+
 
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
       const float* base = bases[motor];
@@ -626,12 +713,39 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
       float reading_now = getAverageReading(motor);
       float length_now = mapFloat(reading_now, ZERO_POS[motor], END_POS[motor], 0, SAFE_MAX_INCHES) + length_min;
-      float error = length_t - length_now;
 
+      float measured_vel = 0.0f;
+
+      if (!first_sample) {
+        float dt = duration / steps;   // seconds per step
+        measured_vel = (length_now - prev_length_now[motor]) / dt;
+      }
+      prev_length_now[motor] = length_now;
+
+      float error = length_t - length_now;
+      
+      bool motors_enabled = (digitalRead(ENABLE_MOTORS) == LOW);
+      
       float vel = (length_next - length_t + error * Kp) * steps / duration;
+      
+      if (!motors_enabled) {
+        vel = 0.0f;
+        measured_vel = 0.0f;
+      }
+      
+      float alpha = 0.2f;   // tuning parameter
+      vel_filter_state[motor] += alpha * (measured_vel - vel_filter_state[motor]);
+      measured_vel = vel_filter_state[motor];
+
+      measured_vel_local[motor] = measured_vel;
+      vel_local[motor] = vel;
 
       // Clamp velocity range
       if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
+
+      // clamp for testing
+      //if (vel > 0.75f) vel = 0.75f; else if (vel < -0.75f) vel = -0.75f;
+      vel_local[motor] = vel;
 
       // Map magnitude to PWM, keep sign for direction
       int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
@@ -653,6 +767,37 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
             digitalWrite(DIR_PINS[motor], (p > 0) ? EXTEND : RETRACT);
             analogWrite(PWM_PINS[motor], abs(p));
         }
+    }
+
+    first_sample = false;
+
+    bool motors_enabled = (digitalRead(ENABLE_MOTORS) == LOW);
+
+    if (motors_enabled) {
+
+      Serial.print("<CMD_VEL_PER_SEC> ");
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print(vel_local[m], 3);
+        if (m < NUM_MOTORS - 1) Serial.print(", ");
+      }
+      Serial.println();
+
+      Serial.print("<MEAS_VEL> ");
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        Serial.print(measured_vel_local[m], 3);
+        if (m < NUM_MOTORS - 1) Serial.print(", ");
+      }
+      Serial.println();
+
+      Serial.print("<POS_IN> ");
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+          float reading_now = getAverageReading(m);
+          float length_now = mapFloat(reading_now, ZERO_POS[m], END_POS[m], 0, SAFE_MAX_INCHES);
+          Serial.print(length_now, 3);
+          if (m < NUM_MOTORS - 1) Serial.print(", ");
+      }
+      Serial.println();
+
     }
 
     unsigned long target_delay = (unsigned long)((duration * 1000.0f) / (float)steps);
