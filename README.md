@@ -102,6 +102,9 @@ PlatformIO manages compilation, library dependencies, board configuration, uploa
 
 ---
 
+### Clone the Repository
+Type in terminal: git clone https://github.com/OUSpring2026DroneCapstone/stewart_platform
+
 ### Open the Project
 
 1. Open Visual Studio Code
