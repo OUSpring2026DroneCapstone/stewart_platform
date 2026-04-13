@@ -19,6 +19,15 @@
 #define PWM_PIN_5 6
 #define PWM_PIN_4 7
 
+// LED strip
+#define LED_PIN    8
+
+// Cooling fans
+#define FAN_PIN_1  11
+#define FAN_PIN_2  12
+#define FAN_PIN_3  18
+#define FAN_PIN_4  19
+
 // PA-14P potentiometer pins
 #define POT_PIN_1 A1
 #define POT_PIN_2 A2

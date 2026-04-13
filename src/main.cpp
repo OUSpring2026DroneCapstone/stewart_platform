@@ -27,12 +27,6 @@
 #include "platform.h"
 
 #define NUM_LEDS  96
-#define LED_PIN   8
-
-#define FAN_PIN_1  11
-#define FAN_PIN_2  12
-#define FAN_PIN_3  18
-#define FAN_PIN_4  19
 
 CRGB leds[NUM_LEDS];
 
@@ -66,7 +60,7 @@ float TY[3] = {0, 3, 2};
 float TZ[3] = {0, 0, 5};
 
 float zero_length = 0.0f;
-float dur = 2.0f;
+float dur = 4.0f;
 
 bool stop_requested = false;
 bool centered = false;
