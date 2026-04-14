@@ -1,9 +1,8 @@
 """
 Dear PyGui-based GUI (dashboard reskin):
  - Uses Dear PyGui for UI
- - Keeps pygame joystick backend and serial logic
- - Preserves original behavior and commands
- - Adds responsive dashboard layout + card styling
+ - Serial command interface to Arduino
+ - Responsive dashboard layout + card styling
 """
 
 import sys
@@ -96,8 +95,10 @@ def main():
             ser = None
 
     # ---------------- backend ----------------
+    controller_mode = False
+
     def send_command(cmd: str):
-        nonlocal ser
+        nonlocal controller_mode, ser
         if ser:
             try:
                 ser.write((cmd + "\n").encode())
@@ -109,6 +110,14 @@ def main():
                 except Exception:
                     pass
                 ser = None
+
+
+        if cmd == "controller":
+            controller_mode = True
+        elif cmd == "stop":
+            controller_mode = False
+        elif cmd.startswith("start") or cmd == "center":
+            controller_mode = False
 
     # ---------------- state ----------------
     MAIN, START_MENU, PRESETS, RUNNING = "main", "start", "presets", "running"
@@ -570,14 +579,6 @@ def main():
         if menu == MAIN:
             if label == "CENTER":
                 send_command("center")
-            elif label == "READ POTS":
-                send_command("pots")
-            elif label == "ENABLE MOTORS":
-                send_command("enable")
-            elif label == "FAN STATUS":
-                send_command("fans")
-            elif label == "FAN TEST":
-                send_command("fantest")
             elif label == "STOP":
                 send_command("stop")
 
@@ -626,7 +627,7 @@ def main():
         with dpg.group(tag="buttons_container", parent="sidebar", indent=SIDEBAR_PAD):
             labels = []
             if menu == MAIN:
-                labels = ["START", "CENTER", "CALIBRATE", "READ POTS", "ENABLE MOTORS", "FAN STATUS", "FAN TEST", "STOP"]
+                labels = ["START", "CENTER", "CALIBRATE", "STOP"]
                 dpg.configure_item("menu_title", default_value="MAIN")
             elif menu == START_MENU:
                 labels = ["CONTROLLER", "PRESETS", "BACK"]
@@ -787,6 +788,7 @@ def main():
 
     # ---------------- main loop ----------------
     while dpg.is_dearpygui_running():
+
         # Serial feedback
         if ser:
                 try:
@@ -905,6 +907,8 @@ def main():
         # Update top status
         dpg.configure_item("status_serial", default_value=f"Serial: {'CONNECTED' if ser else 'DISCONNECTED'}",
                            color=(COL_GOOD if ser else COL_WARN))
+
+        # Update pose display
         pose_vals = {
             "pose_roll":  (0.0, ROT_RANGE),
             "pose_pitch": (0.0, ROT_RANGE),
@@ -947,7 +951,12 @@ def main():
         now = time.monotonic()
 
         # pose
-        roll = xval = yval = pitch = yaw = zval = 0.0
+        roll  = 0.0
+        xval  = 0.0
+        yval  = 0.0
+        pitch = 0.0
+        yaw   = 0.0
+        zval  = 0.0
 
         t_hist.append(now)
         x_hist.append(xval)

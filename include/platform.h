@@ -16,8 +16,8 @@
 
 // Default platform calibration settings (average analog values at extrema for each actuator)
 #define OFF_THRESHOLD 500  // ignore calibration if motors aren't powered (i.e. large reading difference from default is found)
-int16_t ZERO_POS[NUM_MOTORS]  = { 45, 45, 45, 45, 45, 875 };
-int16_t END_POS[NUM_MOTORS]   = { 875, 875, 875, 875, 875, 45 };
+int16_t ZERO_POS[NUM_MOTORS]  = { 45, 45, 45, 45, 45, 45 };
+int16_t END_POS[NUM_MOTORS]   = { 875, 875, 875, 875, 875, 875 };
 
 // Stroke and calibration limits (inches)
 // Note: mapping currently treats the full range as 8". Use SAFE_MAX_INCHES

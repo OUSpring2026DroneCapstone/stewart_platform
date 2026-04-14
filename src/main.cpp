@@ -44,12 +44,12 @@ int16_t end_readings[NUM_MOTORS];
 int16_t zero_readings[NUM_MOTORS];
 bool calibration_valid;
 
-// Iterator/sum variables 
+// Iterator/sum variables
 uint8_t motor;
 uint8_t reading;
 int32_t reading_sum;
 
-// Quaternions / transforms 
+// Quaternions / transforms
 Quaternion R0, R1, R2, R3;
 
 float T0[3] = {0, 0, 0};
@@ -60,7 +60,7 @@ float TY[3] = {0, 3, 2};
 float TZ[3] = {0, 0, 5};
 
 float zero_length = 0.0f;
-float dur = 10.0f;
+float dur = 2.0f;
 
 bool stop_requested = false;
 bool centered = false;
@@ -107,7 +107,6 @@ void lerp(const float pos0[3], const float pos1[3], float t, float T[3]);
 inline void moveplat(float duration, float length_min, float pos0[3], float pos1[3], Quaternion q0, Quaternion q1);
 
 void setMotorsEnabled(bool en);
-void stopThisHoe();
 void stopMotors();
 void setFans(bool on);
 
@@ -143,7 +142,7 @@ void runPreset(PresetID p) {
     float Z_HIGH;
 
     case PRESET_DEMO:
-      // Simple demo sequence: center -> forward -> right -> left -> back -> up -> center 
+      // Simple demo sequence: center -> forward -> right -> left -> back -> up -> center
       moveplat(dur, zero_length, T0, T1, R0, R0);
       moveplat(dur, zero_length, T1, TX, R0, R0);
       moveplat(dur, zero_length, TX, T1, R0, R0);
@@ -157,13 +156,13 @@ void runPreset(PresetID p) {
       // Figure-8 motion in XY plane with varying Z height
       Z_LOW  = 1.8f;   // lower at crossover
       Z_HIGH = 2.4f;   // higher at outer lobes
-    
+
       float F8_1[3] = {  2.5f,  0.0f, Z_HIGH };
       float F8_2[3] = {  0.0f,  2.5f, Z_LOW  };
       float F8_3[3] = { -2.5f,  0.0f, Z_HIGH };
       float F8_4[3] = {  0.0f, -2.5f, Z_LOW  };
       float F8_5[3] = {  2.5f,  0.0f, Z_HIGH };
-    
+
       moveplat(dur, zero_length, T_CENTER, F8_1, R0, R0);
       moveplat(dur, zero_length, F8_1, F8_2, R0, R0);
       moveplat(dur, zero_length, F8_2, F8_3, R0, R0);
@@ -203,7 +202,7 @@ void runPreset(PresetID p) {
 
       break;
     }
-      
+
     case PRESET_WAVE:
     {
         // Wave motion in a grid pattern with 8 waypoints, alternating Z height to create a "wave" effect
@@ -211,27 +210,27 @@ void runPreset(PresetID p) {
         Z_LOW  = 1.7f;
         Z_MID  = 2.0f;
         Z_HIGH = 2.5f;
-      
+
         float P1[3] = {  2.5f,  0.0f, Z_HIGH };
         float P2[3] = { -2.5f,  0.0f, Z_LOW  };
         float P3[3] = {  2.5f,  0.0f, Z_HIGH };
         float P4[3] = {  0.0f,  0.0f, Z_MID  };
-      
+
         float P5[3] = {  0.0f,  2.5f, Z_HIGH };
         float P6[3] = {  0.0f, -2.5f, Z_LOW  };
         float P7[3] = {  0.0f,  2.5f, Z_HIGH };
         float P8[3] = {  0.0f,  0.0f, Z_MID  };
-      
+
         moveplat(dur, zero_length, T_CENTER, P1, R0, R0);
         moveplat(dur, zero_length, P1, P2, R0, R0);
         moveplat(dur, zero_length, P2, P3, R0, R0);
         moveplat(dur, zero_length, P3, P4, R0, R0);
-      
+
         moveplat(dur, zero_length, P4, P5, R0, R0);
         moveplat(dur, zero_length, P5, P6, R0, R0);
         moveplat(dur, zero_length, P6, P7, R0, R0);
         moveplat(dur, zero_length, P7, P8, R0, R0);
-      
+
         moveplat(dur, zero_length, P8, T_CENTER, R0, R0);
 
         break;
@@ -279,8 +278,6 @@ void setup() {
 
   // Compute baseline actuator length at home position (zero_length)
   // Used as reference for all motion calculations
-
-  // zero_length
   for (int i = 0; i < 3; i++) {
     float d = plat_0[i] + plat_1[i] - base_1[i];
     zero_length += d * d;
@@ -293,12 +290,13 @@ void setup() {
   R2 = azi_alt_to_rot(90.0, 10.0);
   R3 = Quaternion(cos(PI/12), 0, 0, sin(PI/12));
 
+  // Fan PWM outputs and tachometer inputs
   pinMode(FAN_PIN_1, OUTPUT);
   pinMode(FAN_PIN_2, OUTPUT);
   pinMode(FAN_TACH_1, INPUT_PULLUP);
   pinMode(FAN_TACH_2, INPUT_PULLUP);
 
-  // Initialize cooling fans at full speed
+  // Initialize cooling fans (always on at startup)
   setFans(true);
 
   // Initialize LED strip and perform startup test (red flash)
@@ -311,16 +309,6 @@ void setup() {
   delay(500);
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
-
-  // Print initial pot readings so we can verify sensors before moving
-  Serial.println("POT READINGS (raw ADC):");
-  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-    int raw = getAverageReading(m);
-    float ext_in = mapFloat(raw, ZERO_POS[m], END_POS[m], 0.0f, SAFE_MAX_INCHES);
-    Serial.print("  M"); Serial.print(m + 1);
-    Serial.print(": raw="); Serial.print(raw);
-    Serial.print("  ext="); Serial.print(ext_in, 3); Serial.println("\"");
-  }
 
   // System ready for commands via serial
   Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
@@ -345,14 +333,13 @@ void updateLEDs() {
   FastLED.show();
 }
 
- /*
+/*
  * Main control loop:
  * - Always listens for serial commands
  * - Runs joystick control if in controller mode
  * - Executes scripted presets if in script mode
  * - Updates LED feedback continuously
  */
-
 void loop() {
 
   // Always watch for text commands
@@ -374,16 +361,16 @@ void loop() {
 
     Serial.println("Running preset");
     runPreset(active_preset);
-  
+
     // clean shutdown
     for (uint8_t m = 0; m < NUM_MOTORS; m++) {
       analogWrite(PWM_PINS[m], 0);
     }
-  
+
     setMotorsEnabled(false);
     mode = MODE_IDLE;
     active_preset = PRESET_NONE;
-  
+
     Serial.println("Preset complete. Motors disabled.");
   }
 
@@ -392,28 +379,26 @@ void loop() {
 }
 
 inline void doCenter() {
-    Serial.println("Centering: retracting all actuators...");
-    stop_requested = false;
-    setMotorsEnabled(true);
+  Serial.println("Centering: retracting all actuators...");
+  stop_requested = false;
+  setMotorsEnabled(true);
 
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-        digitalWrite(DIR_PINS[m], RETRACT);
-        analogWrite(PWM_PINS[m], MAX_PWM);
-    }
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    digitalWrite(DIR_PINS[m], RETRACT);
+    analogWrite(PWM_PINS[m], MAX_PWM);
+  }
 
-    delay(RESET_DELAY);
+  delay(RESET_DELAY);
 
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-        analogWrite(PWM_PINS[m], 0);
-    }
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    analogWrite(PWM_PINS[m], 0);
+  }
 
-    setMotorsEnabled(false);
-    centered = true;
-    mode = MODE_IDLE;
-    Serial.println("Centered. Motors disabled.");
+  setMotorsEnabled(false);
+  centered = true;
+  mode = MODE_IDLE;
+  Serial.println("Centered. Motors disabled.");
 }
-
-// Text commands: center/start/controller/stop
 
 // Parses incoming serial commands and updates system state.
 // Commands include:
@@ -428,7 +413,7 @@ void checkTextCommands() {
   while (Serial.available()) {
     char c = Serial.peek();
 
-    // If it's a joystick frame, don’t eat it here
+    // If it's a joystick frame, don't eat it here
     if (c == 'J') return;
 
     c = Serial.read();
@@ -438,80 +423,13 @@ void checkTextCommands() {
 
       if (buf.length() == 0) { buf = ""; continue; }
 
-      if (buf == "fantest") {
-        Serial.println("Fan test: ramping pin 9 up then down...");
-        pinMode(9, OUTPUT);
-        for (int p = 0; p <= 255; p += 5) { analogWrite(9, p); delay(30); }
-        for (int p = 255; p >= 0; p -= 5) { analogWrite(9, p); delay(30); }
-        analogWrite(9, 0);
-        Serial.println("Fan test done.");
-      }
-      else if (buf == "fans") {
-        // Count tach pulses on both fans simultaneously over 500ms window
-        // PC fans: 2 pulses per revolution
-        Serial.println("FAN STATUS (measuring RPM for 500ms...):");
-        uint32_t count1 = 0, count2 = 0;
-        bool last1 = digitalRead(FAN_TACH_1);
-        bool last2 = digitalRead(FAN_TACH_2);
-        uint32_t t_end = millis() + 500;
-        while (millis() < t_end) {
-          bool cur1 = digitalRead(FAN_TACH_1);
-          bool cur2 = digitalRead(FAN_TACH_2);
-          if (last1 && !cur1) count1++;  // falling edge
-          if (last2 && !cur2) count2++;
-          last1 = cur1;
-          last2 = cur2;
-        }
-        // RPM = (edges / 2 pulses_per_rev) / 0.5s * 60 = edges * 60
-        uint32_t rpm1 = count1 * 60;
-        uint32_t rpm2 = count2 * 60;
-        Serial.print("  FAN_1 (pin 9,  tach pin 14): "); Serial.print(rpm1); Serial.println(" RPM");
-        Serial.print("  FAN_2 (pin 10, tach pin 15): "); Serial.print(rpm2); Serial.println(" RPM");
-      }
-      else if (buf == "enable") {
-        setMotorsEnabled(true);
-        Serial.println("Motors enabled.");
-      }
-      else if (buf.startsWith("extend ")) {
-        int n = buf.substring(7).toInt();
-        if (n >= 1 && n <= NUM_MOTORS) {
-          setMotorsEnabled(true);
-          digitalWrite(DIR_PINS[n-1], EXTEND);
-          analogWrite(PWM_PINS[n-1], 128);
-          Serial.print("Extending M"); Serial.println(n);
-        }
-      }
-      else if (buf.startsWith("retract ")) {
-        int n = buf.substring(8).toInt();
-        if (n >= 1 && n <= NUM_MOTORS) {
-          setMotorsEnabled(true);
-          digitalWrite(DIR_PINS[n-1], RETRACT);
-          analogWrite(PWM_PINS[n-1], 128);
-          Serial.print("Retracting M"); Serial.println(n);
-        }
-      }
-      else if (buf == "mstop") {
-        stopMotors();
-        setMotorsEnabled(false);
-        Serial.println("Motors stopped.");
-      }
-      else if (buf == "pots") {
-        Serial.println("POT READINGS (raw ADC):");
-        for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-          int raw = getAverageReading(m);
-          float ext_in = mapFloat(raw, ZERO_POS[m], END_POS[m], 0.0f, SAFE_MAX_INCHES);
-          Serial.print("  M"); Serial.print(m + 1);
-          Serial.print(": raw="); Serial.print(raw);
-          Serial.print("  ext="); Serial.print(ext_in, 3); Serial.println("\"");
-        }
-      }
-      else if (buf == "stop") {
+      if (buf == "stop") {
         stop_requested = true;
         mode = MODE_IDLE;
         active_preset = PRESET_NONE;
         centered = false;
         setMotorsEnabled(false);
-      
+
         Serial.println("STOP received. All motion halted.");
       }
       else if (buf == "center") {
@@ -532,12 +450,37 @@ void checkTextCommands() {
         calibrate();
         Serial.println("Calibrating Done");
       }
+      else if (buf == "fans") {
+        // Count tach pulses on both fans simultaneously over 500ms window
+        // PC fans: 2 pulses per revolution
+        Serial.println("FAN STATUS (measuring RPM for 500ms...):");
+        uint32_t count1 = 0, count2 = 0;
+        bool last1 = digitalRead(FAN_TACH_1);
+        bool last2 = digitalRead(FAN_TACH_2);
+        uint32_t t_end = millis() + 500;
+        while (millis() < t_end) {
+          bool cur1 = digitalRead(FAN_TACH_1);
+          bool cur2 = digitalRead(FAN_TACH_2);
+          if (last1 && !cur1) count1++;  // falling edge
+          if (last2 && !cur2) count2++;
+          last1 = cur1;
+          last2 = cur2;
+        }
+        // RPM = (edges / 2 pulses_per_rev) / 0.5s * 60 = edges * 60
+        Serial.print("  FAN_1 (pin 9,  tach pin 14): "); Serial.print(count1 * 60); Serial.println(" RPM");
+        Serial.print("  FAN_2 (pin 10, tach pin 15): "); Serial.print(count2 * 60); Serial.println(" RPM");
+      }
+      else if (buf == "fantest") {
+        Serial.println("Fan test: ramping up then down...");
+        for (int p = 0; p <= 255; p += 5) { analogWrite(FAN_PIN_1, p); delay(30); }
+        for (int p = 255; p >= 0; p -= 5) { analogWrite(FAN_PIN_1, p); delay(30); }
+        analogWrite(FAN_PIN_1, 255);
+        Serial.println("Fan test done.");
+      }
       else if (buf.startsWith("start")) {
-        //doCenter();
-
         String arg = buf.substring(5);
         arg.trim();
-      
+
         if (arg == "demo") {
           active_preset = PRESET_DEMO;
         }
@@ -555,10 +498,10 @@ void checkTextCommands() {
           buf = "";
           return;
         }
-      
+
         setMotorsEnabled(true);
         mode = MODE_SCRIPT;
-      
+
         Serial.print("Starting preset: ");
         Serial.println(arg);
       }
@@ -580,11 +523,11 @@ void checkTextCommands() {
 // Math computations
 inline int getAverageReading(uint8_t motor)
 {
-    reading_sum = 0;
-    for (reading = 0; reading < NUM_READINGS; ++reading) {
-        reading_sum += analogRead(POT_PINS[motor]);
-    }
-    return reading_sum / NUM_READINGS;
+  reading_sum = 0;
+  for (reading = 0; reading < NUM_READINGS; ++reading) {
+    reading_sum += analogRead(POT_PINS[motor]);
+  }
+  return reading_sum / NUM_READINGS;
 }
 
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
@@ -741,7 +684,6 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
   float Kp = 0.25f;
 
   float start_ext[NUM_MOTORS];
-  
   float end_ext[NUM_MOTORS];
   float max_ext[NUM_MOTORS];
   for (uint8_t m = 0; m < NUM_MOTORS; m++) {
@@ -754,7 +696,6 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
   bool first_sample = true;
 
   static float vel_filter_state[NUM_MOTORS] = {0};
-
 
   for (int step = 0; step <= steps; step++) {
 
@@ -781,7 +722,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     }
 
     unsigned long start_time = millis();
-    float t      = float(step)     / steps;
+    float t      = float(step) / steps;
     float t_next = float(step + 1) / steps;
 
     Quaternion rot_t    = slerp(q0, q1, t);
@@ -792,11 +733,8 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     lerp(pos0, pos1, t_next, T_next);
 
     float pwm_local[NUM_MOTORS];
-    float vel_local[NUM_MOTORS];   // store velocity per motor (commanded)
+    float vel_local[NUM_MOTORS];         // store velocity per motor (commanded)
     float measured_vel_local[NUM_MOTORS];
-    
-    
-
 
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
       const float* base = bases[motor];
@@ -839,16 +777,16 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       prev_length_now[motor] = length_now;
 
       float error = length_t - length_now;
-      
+
       bool motors_enabled = (digitalRead(ENABLE_MOTORS) == LOW);
-      
+
       float vel = (length_next - length_t + error * Kp) * steps / duration;
-      
+
       if (!motors_enabled) {
         vel = 0.0f;
         measured_vel = 0.0f;
       }
-      
+
       float alpha = 0.2f;   // tuning parameter
       vel_filter_state[motor] += alpha * (measured_vel - vel_filter_state[motor]);
       measured_vel = vel_filter_state[motor];
@@ -857,15 +795,12 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       vel_local[motor] = vel;
 
       // Clamp velocity range
-      if (vel > 0.2f) vel = 0.2f; else if (vel < -0.2f) vel = -0.2f;
-
-      // clamp for testing
-      //if (vel > 0.75f) vel = 0.75f; else if (vel < -0.75f) vel = -0.75f;
+      if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
       vel_local[motor] = vel;
 
       // Map magnitude to PWM, keep sign for direction
       int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
-      if (pwm_speed < 30) pwm_speed = 0; // deadzone: ignore small corrections to avoid hunting
+      if (pwm_speed < 10) pwm_speed = 0; // lowered deadzone for debugging
       pwm_local[motor] = (vel >= 0.0f) ? pwm_speed : -pwm_speed;
 
       // Stats: track start, end, and max extension (inches)
@@ -876,19 +811,12 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     }
 
     for (motor = 0; motor < NUM_MOTORS; ++motor) {
-        int p = (int)pwm_local[motor];
-        if (p == 0) {
-            analogWrite(PWM_PINS[motor], 0);
-        } else {
-            digitalWrite(DIR_PINS[motor], (p > 0) ? EXTEND : RETRACT);
-            analogWrite(PWM_PINS[motor], abs(p));
-        }
-    }
-
-    // Hard stop at the end of each segment so motors don't hunt at the target
-    if (step == steps) {
-      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-        analogWrite(PWM_PINS[m], 0);
+      int p = (int)pwm_local[motor];
+      if (p == 0) {
+        analogWrite(PWM_PINS[motor], 0);
+      } else {
+        digitalWrite(DIR_PINS[motor], (p > 0) ? EXTEND : RETRACT);
+        analogWrite(PWM_PINS[motor], abs(p));
       }
     }
 
@@ -914,10 +842,10 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
       Serial.print("<POS_IN> ");
       for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-          float reading_now = getAverageReading(m);
-          float length_now = mapFloat(reading_now, ZERO_POS[m], END_POS[m], 0, SAFE_MAX_INCHES);
-          Serial.print(length_now, 3);
-          if (m < NUM_MOTORS - 1) Serial.print(", ");
+        float reading_now = getAverageReading(m);
+        float length_now = mapFloat(reading_now, ZERO_POS[m], END_POS[m], 0, SAFE_MAX_INCHES);
+        Serial.print(length_now, 3);
+        if (m < NUM_MOTORS - 1) Serial.print(", ");
       }
       Serial.println();
 
