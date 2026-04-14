@@ -781,7 +781,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
     }
 
     unsigned long start_time = millis();
-    float t      = float(step) / steps;
+    float t      = float(step)     / steps;
     float t_next = float(step + 1) / steps;
 
     Quaternion rot_t    = slerp(q0, q1, t);
@@ -865,7 +865,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
       // Map magnitude to PWM, keep sign for direction
       int pwm_speed = (int)mapFloat(fabsf(vel), 0.0f, 2.0f, 0.0f, 255.0f);
-      if (pwm_speed < 10) pwm_speed = 0; // lowered deadzone for debugging
+      if (pwm_speed < 30) pwm_speed = 0; // deadzone: ignore small corrections to avoid hunting
       pwm_local[motor] = (vel >= 0.0f) ? pwm_speed : -pwm_speed;
 
       // Stats: track start, end, and max extension (inches)
@@ -883,6 +883,13 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
             digitalWrite(DIR_PINS[motor], (p > 0) ? EXTEND : RETRACT);
             analogWrite(PWM_PINS[motor], abs(p));
         }
+    }
+
+    // Hard stop at the end of each segment so motors don't hunt at the target
+    if (step == steps) {
+      for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        analogWrite(PWM_PINS[m], 0);
+      }
     }
 
     first_sample = false;

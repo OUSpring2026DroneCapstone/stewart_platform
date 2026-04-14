@@ -31,7 +31,7 @@ const uint8_t PWM_PINS[NUM_MOTORS] = { PWM_PIN_1, PWM_PIN_2, PWM_PIN_3, PWM_PIN_
 const uint8_t POT_PINS[NUM_MOTORS] = { POT_PIN_1, POT_PIN_2, POT_PIN_3, POT_PIN_4, POT_PIN_5, POT_PIN_6 };
 
 // Movement parameters
-#define RESET_DELAY 5000      // at full PWM, the actuator should fully extend/retract by 4s (6" stroke, 2.00"/s)
+#define RESET_DELAY 10000      // at full PWM, the actuator should fully extend/retract by 4s (6" stroke, 2.00"/s)
 typedef enum _MotorDirection  // to clarify the direction in which actuators move
 {
     RETRACT = 0,
