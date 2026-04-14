@@ -6,7 +6,7 @@
 // Direction pins
 #define DIR_PIN_1 41
 #define DIR_PIN_2 43
-#define DIR_PIN_3 45
+#define DIR_PIN_3 30
 #define DIR_PIN_6 40
 #define DIR_PIN_5 42
 #define DIR_PIN_4 44
@@ -22,16 +22,18 @@
 // LED strip
 #define LED_PIN    8
 
-// Cooling fans
-#define FAN_PIN_1  11
-#define FAN_PIN_2  12
-#define FAN_PIN_3  18
-#define FAN_PIN_4  19
+// Cooling fans (PWM speed control)
+#define FAN_PIN_1  9
+#define FAN_PIN_2  10
+
+// Fan tachometer (RPM sense)
+#define FAN_TACH_1 14
+#define FAN_TACH_2 15
 
 // PA-14P potentiometer pins
 #define POT_PIN_1 A1
 #define POT_PIN_2 A2
-#define POT_PIN_3 A3
+#define POT_PIN_3 A8
 #define POT_PIN_4 A4
 #define POT_PIN_5 A5
 #define POT_PIN_6 A6

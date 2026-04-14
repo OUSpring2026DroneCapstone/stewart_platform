@@ -60,7 +60,7 @@ float TY[3] = {0, 3, 2};
 float TZ[3] = {0, 0, 5};
 
 float zero_length = 0.0f;
-float dur = 4.0f;
+float dur = 10.0f;
 
 bool stop_requested = false;
 bool centered = false;
@@ -295,10 +295,10 @@ void setup() {
 
   pinMode(FAN_PIN_1, OUTPUT);
   pinMode(FAN_PIN_2, OUTPUT);
-  pinMode(FAN_PIN_3, OUTPUT);
-  pinMode(FAN_PIN_4, OUTPUT);
+  pinMode(FAN_TACH_1, INPUT_PULLUP);
+  pinMode(FAN_TACH_2, INPUT_PULLUP);
 
-  // Initialize cooling fans (always on at startup)
+  // Initialize cooling fans at full speed
   setFans(true);
 
   // Initialize LED strip and perform startup test (red flash)
@@ -312,16 +312,24 @@ void setup() {
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
 
+  // Print initial pot readings so we can verify sensors before moving
+  Serial.println("POT READINGS (raw ADC):");
+  for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+    int raw = getAverageReading(m);
+    float ext_in = mapFloat(raw, ZERO_POS[m], END_POS[m], 0.0f, SAFE_MAX_INCHES);
+    Serial.print("  M"); Serial.print(m + 1);
+    Serial.print(": raw="); Serial.print(raw);
+    Serial.print("  ext="); Serial.print(ext_in, 3); Serial.println("\"");
+  }
+
   // System ready for commands via serial
   Serial.println("Ready. Commands: center | controller | start | stop | calibrate");
 }
 
 // Function to control cooling fans, turning on or off based on system state (e.g., on during motion, off when idle)
 void setFans(bool on) {
-  digitalWrite(FAN_PIN_1, on ? HIGH : LOW);
-  digitalWrite(FAN_PIN_2, on ? HIGH : LOW);
-  digitalWrite(FAN_PIN_3, on ? HIGH : LOW);
-  digitalWrite(FAN_PIN_4, on ? HIGH : LOW);
+  analogWrite(FAN_PIN_1, on ? 255 : 0);
+  analogWrite(FAN_PIN_2, on ? 255 : 0);
 }
 
 // Updates LED strip with rainbow pattern. Called continuously in main loop for visual feedback.
@@ -384,17 +392,16 @@ void loop() {
 }
 
 inline void doCenter() {
-    Serial.println("Centering...");
+    Serial.println("Centering: retracting all actuators...");
     stop_requested = false;
-
     setMotorsEnabled(true);
 
-    moveplat(2.0f, zero_length, T0, T0, R0, R0);
+    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+        digitalWrite(DIR_PINS[m], RETRACT);
+        analogWrite(PWM_PINS[m], MAX_PWM);
+    }
 
-    T_cur[0] = 0;
-    T_cur[1] = 0;
-    T_cur[2] = 2.0f;
-    R_cur = Quaternion(1, 0, 0, 0);
+    delay(RESET_DELAY);
 
     for (uint8_t m = 0; m < NUM_MOTORS; m++) {
         analogWrite(PWM_PINS[m], 0);
@@ -403,33 +410,6 @@ inline void doCenter() {
     setMotorsEnabled(false);
     centered = true;
     mode = MODE_IDLE;
-
-    // Capture centered pot readings as zero reference
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-        ZERO_POS[m] = getAverageReading(m);
-    }
-
-    // Print new zero references for debugging
-    Serial.println("Zero references captured:");
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-        Serial.print("  M"); Serial.print(m + 1);
-        Serial.print(": "); Serial.println(ZERO_POS[m]);
-    }
-
-    Serial.println("Pot check (3 samples, 200ms apart):");
-for (int s = 0; s < 3; s++) {
-    for (uint8_t m = 0; m < NUM_MOTORS; m++) {
-        Serial.print("  M"); Serial.print(m + 1);
-        Serial.print(": "); Serial.print(getAverageReading(m));
-        Serial.print("  ");
-    }
-    Serial.println();
-    delay(200);
-}
-
-    Serial.print("ZERO_LEN: ");
-    Serial.println(zero_length, 3);
-
     Serial.println("Centered. Motors disabled.");
 }
 
@@ -458,7 +438,74 @@ void checkTextCommands() {
 
       if (buf.length() == 0) { buf = ""; continue; }
 
-      if (buf == "stop") {
+      if (buf == "fantest") {
+        Serial.println("Fan test: ramping pin 9 up then down...");
+        pinMode(9, OUTPUT);
+        for (int p = 0; p <= 255; p += 5) { analogWrite(9, p); delay(30); }
+        for (int p = 255; p >= 0; p -= 5) { analogWrite(9, p); delay(30); }
+        analogWrite(9, 0);
+        Serial.println("Fan test done.");
+      }
+      else if (buf == "fans") {
+        // Count tach pulses on both fans simultaneously over 500ms window
+        // PC fans: 2 pulses per revolution
+        Serial.println("FAN STATUS (measuring RPM for 500ms...):");
+        uint32_t count1 = 0, count2 = 0;
+        bool last1 = digitalRead(FAN_TACH_1);
+        bool last2 = digitalRead(FAN_TACH_2);
+        uint32_t t_end = millis() + 500;
+        while (millis() < t_end) {
+          bool cur1 = digitalRead(FAN_TACH_1);
+          bool cur2 = digitalRead(FAN_TACH_2);
+          if (last1 && !cur1) count1++;  // falling edge
+          if (last2 && !cur2) count2++;
+          last1 = cur1;
+          last2 = cur2;
+        }
+        // RPM = (edges / 2 pulses_per_rev) / 0.5s * 60 = edges * 60
+        uint32_t rpm1 = count1 * 60;
+        uint32_t rpm2 = count2 * 60;
+        Serial.print("  FAN_1 (pin 9,  tach pin 14): "); Serial.print(rpm1); Serial.println(" RPM");
+        Serial.print("  FAN_2 (pin 10, tach pin 15): "); Serial.print(rpm2); Serial.println(" RPM");
+      }
+      else if (buf == "enable") {
+        setMotorsEnabled(true);
+        Serial.println("Motors enabled.");
+      }
+      else if (buf.startsWith("extend ")) {
+        int n = buf.substring(7).toInt();
+        if (n >= 1 && n <= NUM_MOTORS) {
+          setMotorsEnabled(true);
+          digitalWrite(DIR_PINS[n-1], EXTEND);
+          analogWrite(PWM_PINS[n-1], 128);
+          Serial.print("Extending M"); Serial.println(n);
+        }
+      }
+      else if (buf.startsWith("retract ")) {
+        int n = buf.substring(8).toInt();
+        if (n >= 1 && n <= NUM_MOTORS) {
+          setMotorsEnabled(true);
+          digitalWrite(DIR_PINS[n-1], RETRACT);
+          analogWrite(PWM_PINS[n-1], 128);
+          Serial.print("Retracting M"); Serial.println(n);
+        }
+      }
+      else if (buf == "mstop") {
+        stopMotors();
+        setMotorsEnabled(false);
+        Serial.println("Motors stopped.");
+      }
+      else if (buf == "pots") {
+        Serial.println("POT READINGS (raw ADC):");
+        for (uint8_t m = 0; m < NUM_MOTORS; m++) {
+          int raw = getAverageReading(m);
+          float ext_in = mapFloat(raw, ZERO_POS[m], END_POS[m], 0.0f, SAFE_MAX_INCHES);
+          Serial.print("  M"); Serial.print(m + 1);
+          Serial.print(": raw="); Serial.print(raw);
+          Serial.print("  ext="); Serial.print(ext_in, 3); Serial.println("\"");
+        }
+      }
+      else if (buf == "stop") {
         stop_requested = true;
         mode = MODE_IDLE;
         active_preset = PRESET_NONE;
@@ -537,9 +584,7 @@ inline int getAverageReading(uint8_t motor)
     for (reading = 0; reading < NUM_READINGS; ++reading) {
         reading_sum += analogRead(POT_PINS[motor]);
     }
-    int raw = reading_sum / NUM_READINGS;
-    if (motor == 5) return ZERO_POS[5];
-    return raw;
+    return reading_sum / NUM_READINGS;
 }
 
 inline float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
@@ -812,7 +857,7 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
       vel_local[motor] = vel;
 
       // Clamp velocity range
-      if (vel > 2.0f) vel = 2.0f; else if (vel < -2.0f) vel = -2.0f;
+      if (vel > 0.2f) vel = 0.2f; else if (vel < -0.2f) vel = -0.2f;
 
       // clamp for testing
       //if (vel > 0.75f) vel = 0.75f; else if (vel < -0.75f) vel = -0.75f;

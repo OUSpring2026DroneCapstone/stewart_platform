@@ -10,8 +10,6 @@ import sys
 import time
 import serial
 from serial.tools import list_ports
-import pygame
-from joystick import JoystickBackend
 import dearpygui.dearpygui as dpg
 import re
 
@@ -63,8 +61,6 @@ LEG_CRIT = 0.97      # fraction of range for red
 
 
 def main():
-    pygame.init()
-
     # ---------------- serial (optional) ----------------
     ser = None
     def detect_serial_port():
@@ -100,10 +96,8 @@ def main():
             ser = None
 
     # ---------------- backend ----------------
-    controller_mode = False
-
     def send_command(cmd: str):
-        nonlocal controller_mode, ser
+        nonlocal ser
         if ser:
             try:
                 ser.write((cmd + "\n").encode())
@@ -115,19 +109,6 @@ def main():
                 except Exception:
                     pass
                 ser = None
-
-
-        if cmd == "controller":
-            controller_mode = True
-            joystick.enable_controller()
-        elif cmd == "stop":
-            controller_mode = False
-            joystick.disable_controller()
-        elif cmd.startswith("start") or cmd == "center":
-            controller_mode = False
-            joystick.disable_controller()
-
-    joystick = JoystickBackend(ser, on_command=send_command)
 
     # ---------------- state ----------------
     MAIN, START_MENU, PRESETS, RUNNING = "main", "start", "presets", "running"
@@ -346,14 +327,10 @@ def main():
 
     def connection_error_for(action_label):
         missing = []
-        serial_required = {"CENTER", "STOP", "DEMO", "FIGURE 8", "RESTART", "ORBIT", "WAVE"}
-        controller_actions = {"CONTROLLER"}
-        if action_label in serial_required or action_label in controller_actions:
+        serial_required = {"CENTER", "STOP", "DEMO", "FIGURE 8", "RESTART", "ORBIT", "WAVE", "CONTROLLER"}
+        if action_label in serial_required:
             if not ser:
                 missing.append("Serial port not connected")
-        if action_label in controller_actions:
-            if not joystick.available:
-                missing.append("Joystick not connected")
         return missing or None
 
     # ---------------- UI build ----------------
@@ -366,10 +343,6 @@ def main():
                 dpg.add_text("Stewart Platform", color=COL_TEXT)
                 dpg.add_spacer(width=16)
                 dpg.add_text(tag="status_serial", default_value="Serial: DISCONNECTED", color=COL_WARN)
-                dpg.add_spacer(width=16)
-                dpg.add_text(tag="status_joy", default_value="Joystick: DISCONNECTED", color=COL_WARN)
-                dpg.add_spacer(width=16)
-                dpg.add_text(tag="status_mode", default_value="Mode: —", color=COL_MUTED)
 
         # MAIN AREA: sidebar + content
         with dpg.child_window(tag="main_area", border=False):
@@ -583,11 +556,6 @@ def main():
     apply_layout()
 
     # ---------------- menu logic ----------------
-    def toggle_mode(sender=None, app_data=None, user_data=None):
-        joystick.toggle_mode()
-        dpg.configure_item("mode_toggle", label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"))
-        print(f"[Mode] Switched to {'D-PAD' if joystick.dpad_mode else 'ANALOG'}")
-
     def on_button(label):
         nonlocal menu, waiting_for_center, active_preset
         if label == "START" and menu == MAIN:
@@ -602,6 +570,14 @@ def main():
         if menu == MAIN:
             if label == "CENTER":
                 send_command("center")
+            elif label == "READ POTS":
+                send_command("pots")
+            elif label == "ENABLE MOTORS":
+                send_command("enable")
+            elif label == "FAN STATUS":
+                send_command("fans")
+            elif label == "FAN TEST":
+                send_command("fantest")
             elif label == "STOP":
                 send_command("stop")
 
@@ -650,7 +626,7 @@ def main():
         with dpg.group(tag="buttons_container", parent="sidebar", indent=SIDEBAR_PAD):
             labels = []
             if menu == MAIN:
-                labels = ["START", "CENTER", "CALIBRATE", "STOP"]
+                labels = ["START", "CENTER", "CALIBRATE", "READ POTS", "ENABLE MOTORS", "FAN STATUS", "FAN TEST", "STOP"]
                 dpg.configure_item("menu_title", default_value="MAIN")
             elif menu == START_MENU:
                 labels = ["CONTROLLER", "PRESETS", "BACK"]
@@ -672,21 +648,6 @@ def main():
 
                 dpg.add_spacer(height=4)
 
-            # joystick mode toggle (only if joystick exists)
-            if joystick.available:
-                dpg.add_spacer(height=6)
-                dpg.add_separator()
-                dpg.add_spacer(height=10)
-                dpg.add_text("JOYSTICK", color=COL_TEXT)
-                dpg.add_spacer(height=8)
-                mt = dpg.add_button(
-                    tag="mode_toggle",
-                    label=("D-PAD MODE" if joystick.dpad_mode else "ANALOG MODE"),
-                    height=34,
-                    width=SIDEBAR_W - (SIDEBAR_PAD * 2),
-                    callback=toggle_mode
-                )
-                dpg.bind_item_theme(mt, theme_btn_sidebar)
 
     rebuild_buttons()
 
@@ -825,18 +786,7 @@ def main():
             dpg.draw_line((x1,y1), (x2,y2), color=col, thickness=2.0, parent="cube_drawlist")
 
     # ---------------- main loop ----------------
-    clock = pygame.time.Clock()
     while dpg.is_dearpygui_running():
-        events = pygame.event.get()
-
-        # F11 fullscreen
-        for event in events:
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                toggle_fullscreen()
-
-        joystick.handle_events(events)
-        joystick.tick()
-
         # Serial feedback
         if ser:
                 try:
@@ -955,20 +905,13 @@ def main():
         # Update top status
         dpg.configure_item("status_serial", default_value=f"Serial: {'CONNECTED' if ser else 'DISCONNECTED'}",
                            color=(COL_GOOD if ser else COL_WARN))
-        dpg.configure_item("status_joy", default_value=f"Joystick: {'CONNECTED' if joystick.available else 'DISCONNECTED'}",
-                           color=(COL_GOOD if joystick.available else COL_WARN))
-        mode_text = "D-PAD" if joystick.available and joystick.dpad_mode else ("ANALOG" if joystick.available else "—")
-        dpg.configure_item("status_mode", default_value=f"Mode: {mode_text}", color=COL_MUTED)
-
-        # Update pose display (derived from joystick command state)
-        # Rotation axes: alt = pitch, yaw = yaw, roll ≈ 0 (not directly controlled)
         pose_vals = {
             "pose_roll":  (0.0, ROT_RANGE),
-            "pose_pitch": (joystick.alt_f if joystick.available else 0.0, ROT_RANGE),
-            "pose_yaw":   (joystick.yaw_f if joystick.available else 0.0, ROT_RANGE),
-            "pose_x":     (joystick.ax_f if joystick.available else 0.0, TRANS_RANGE),
-            "pose_y":     (joystick.ay_f if joystick.available else 0.0, TRANS_RANGE),
-            "pose_z":     (joystick.az_f if joystick.available else 0.0, TRANS_RANGE),
+            "pose_pitch": (0.0, ROT_RANGE),
+            "pose_yaw":   (0.0, ROT_RANGE),
+            "pose_x":     (0.0, TRANS_RANGE),
+            "pose_y":     (0.0, TRANS_RANGE),
+            "pose_z":     (0.0, TRANS_RANGE),
         }
         for ax_tag, (val, rng) in pose_vals.items():
             bar_frac = (val / rng + 1.0) / 2.0  # map -range..+range → 0..1
@@ -1004,12 +947,7 @@ def main():
         now = time.monotonic()
 
         # pose
-        roll  = 0.0
-        xval  = joystick.ax_f if joystick.available else 0.0
-        yval  = joystick.ay_f if joystick.available else 0.0
-        pitch = joystick.alt_f if joystick.available else 0.0
-        yaw   = joystick.yaw_f if joystick.available else 0.0
-        zval  = joystick.az_f if joystick.available else 0.0
+        roll = xval = yval = pitch = yaw = zval = 0.0
 
         t_hist.append(now)
         x_hist.append(xval)
@@ -1104,7 +1042,7 @@ def main():
         dpg.set_y_scroll("log_box", dpg.get_y_scroll_max("log_box"))
 
         dpg.render_dearpygui_frame()
-        clock.tick(30)
+        time.sleep(1 / 30)
 
     # Cleanup
     if ser:
@@ -1113,7 +1051,6 @@ def main():
         except Exception:
             pass
         ser.close()
-    pygame.quit()
     dpg.destroy_context()
 
 
