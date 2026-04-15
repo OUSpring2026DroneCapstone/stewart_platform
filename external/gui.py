@@ -17,22 +17,22 @@ BAUD_RATE = 115200
 MAX_LOG_LINES = 2000
 
 last_reconnect_attampt = 0.0
-# ---------------- charcoal + dark red theme ----------------
-# Charcoal base (neutral, low-blue)
-COL_BG        = (10, 10, 12)
-COL_TOPBAR    = (14, 14, 17)
-COL_SIDEBAR   = (14, 14, 17)
+# ---------------- white + dark red theme ----------------
+# White base
+COL_BG        = (255, 255, 255)
+COL_TOPBAR    = (210, 210, 215)
+COL_SIDEBAR   = (210, 210, 215)
 
-# Cards (slightly lifted charcoal)
-COL_CARD      = (18, 18, 22)
-COL_CARD_2    = (22, 22, 27)
+# Cards (slightly off-white)
+COL_CARD      = (255, 255, 255)
+COL_CARD_2    = (210, 210, 215)
 
-# Borders/separators (dim warm gray)
-COL_BORDER    = (48, 48, 56)
+# Borders/separators (light gray)
+COL_BORDER    = (160, 160, 172)
 
 # Text
-COL_TEXT      = (235, 235, 240)
-COL_MUTED     = (160, 160, 170)
+COL_TEXT      = (20, 20, 25)
+COL_MUTED     = (100, 100, 110)
 
 # Accent (dark red)
 COL_ACCENT        = (155, 26, 44)
@@ -41,8 +41,8 @@ COL_BAD           = (210, 55, 70)
 COL_WARN          = (230, 165, 80)
 COL_GOOD          = (85, 200, 160)
 
-SIDEBAR_W = 240
-SIDEBAR_PAD = 24
+SIDEBAR_W = 150
+SIDEBAR_PAD = 10
 TOPBAR_H = 52
 PAD = 5
 LEFT_MARGIN = 30
@@ -183,16 +183,16 @@ def main():
             dpg.add_theme_color(dpg.mvThemeCol_SeparatorHovered, COL_ACCENT_HOVER)
             dpg.add_theme_color(dpg.mvThemeCol_SeparatorActive, COL_ACCENT)
 
-            # make widgets charcoal instead of blue-gray
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (26, 26, 32))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (32, 32, 40))
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (36, 36, 46))
+            # light frame backgrounds
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (195, 195, 202))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (182, 182, 190))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (168, 168, 178))
 
-            # optional: scrollbars more subtle
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (12, 12, 16))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (46, 46, 54))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, (60, 60, 70))
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, (75, 75, 90))
+            # scrollbars
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (210, 210, 215))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (150, 150, 162))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, (130, 130, 143))
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, (110, 110, 125))
             dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 6)
             dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
             dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 6)
@@ -236,14 +236,14 @@ def main():
 
     with dpg.theme() as theme_btn_sidebar:
         with dpg.theme_component(dpg.mvButton):
-            dpg.add_theme_color(dpg.mvThemeCol_Button, (255, 255, 255, 10))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (255, 255, 255, 18))
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (255, 255, 255, 26))
+            dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 10))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 0, 0, 18))
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 0, 0, 30))
             dpg.add_theme_color(dpg.mvThemeCol_Text, COL_TEXT)
             dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 4)
 
     # progress bar themes
-    def _bar_theme(fill, bg=(255, 255, 255, 15)):
+    def _bar_theme(fill, bg=(0, 0, 0, 20)):
         with dpg.theme() as t:
             with dpg.theme_component(dpg.mvProgressBar):
                 dpg.add_theme_color(dpg.mvThemeCol_PlotHistogram, fill)
@@ -280,7 +280,7 @@ def main():
         content_w = max(320, aw - SIDEBAR_W)
         content_h = max(240, h - TOPBAR_H)
 
-        dpg.configure_item("sidebar", width=SIDEBAR_W, height=content_h)
+        dpg.configure_item("sidebar", width=SIDEBAR_W)
         dpg.configure_item("content", width=content_w, height=content_h)
         # Dynamically size top row cards and telemetry plot based on viewport
         top_h = compute_top_row_h()
@@ -352,6 +352,8 @@ def main():
                 dpg.add_text("Stewart Platform", color=COL_TEXT)
                 dpg.add_spacer(width=16)
                 dpg.add_text(tag="status_serial", default_value="Serial: DISCONNECTED", color=COL_WARN)
+                dpg.add_spacer(width=16)
+                dpg.add_text("Fans On", color=COL_GOOD)
 
         # MAIN AREA: sidebar + content
         with dpg.child_window(tag="main_area", border=False):
@@ -367,8 +369,6 @@ def main():
 
                         with dpg.group(indent=SIDEBAR_PAD):
                             dpg.add_spacer(height=10)
-                            dpg.add_text(tag="menu_title", default_value="MAIN", color=COL_TEXT)
-                            dpg.add_spacer(height=12)
 
                             # buttons container (rebuilt)
                             with dpg.group(tag="buttons_container"):
@@ -620,6 +620,10 @@ def main():
     def on_button_callback(sender, app_data, user_data):
         on_button(user_data)
 
+    def sidebar_height(n_buttons):
+        # 10 top spacer + n*(34 btn + 4 spacer) + 10 bottom pad
+        return 10 + n_buttons * 38 + 55
+
     def rebuild_buttons():
         if dpg.does_item_exist("buttons_container"):
             dpg.delete_item("buttons_container")
@@ -628,16 +632,16 @@ def main():
             labels = []
             if menu == MAIN:
                 labels = ["START", "CENTER", "CALIBRATE", "STOP"]
-                dpg.configure_item("menu_title", default_value="MAIN")
+
             elif menu == START_MENU:
                 labels = ["CONTROLLER", "PRESETS", "BACK"]
-                dpg.configure_item("menu_title", default_value="START MENU")
+
             elif menu == PRESETS:
                 labels = ["DEMO", "FIGURE 8", "ORBIT", "WAVE", "BACK"]
-                dpg.configure_item("menu_title", default_value="PRESETS")
+
             elif menu == RUNNING:
                 labels = ["RESTART", "STOP"]
-                dpg.configure_item("menu_title", default_value="RUNNING")
+
 
             for i, lab in enumerate(labels):
                 btn = dpg.add_button(label=lab, height=34, width=SIDEBAR_W - (SIDEBAR_PAD * 2),
@@ -648,6 +652,8 @@ def main():
                     dpg.bind_item_theme(btn, theme_btn_sidebar)
 
                 dpg.add_spacer(height=4)
+
+            dpg.configure_item("sidebar", width=SIDEBAR_W, height=sidebar_height(len(labels)))
 
 
     rebuild_buttons()
