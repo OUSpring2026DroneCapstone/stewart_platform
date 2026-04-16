@@ -13,6 +13,7 @@
 #define MAX_POS 1024
 #define MIN_PWM 0
 #define MAX_PWM 255
+#define CENTER_PWM 128
 
 // Default platform calibration settings (average analog values at extrema for each actuator)
 #define OFF_THRESHOLD 500  // ignore calibration if motors aren't powered (i.e. large reading difference from default is found)

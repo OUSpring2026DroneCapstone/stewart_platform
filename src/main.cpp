@@ -60,7 +60,7 @@ float TY[3] = {0, 3, 2};
 float TZ[3] = {0, 0, 5};
 
 float zero_length = 0.0f;
-float dur = 2.0f;
+float dur = 4.0f;
 
 bool stop_requested = false;
 bool centered = false;
@@ -320,17 +320,7 @@ void setFans(bool on) {
   analogWrite(FAN_PIN_2, on ? 255 : 0);
 }
 
-// Updates LED strip with rainbow pattern. Called continuously in main loop for visual feedback.
 void updateLEDs() {
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate < 20) return;  // ~50Hz
-  lastUpdate = millis();
-
-  static uint8_t hue = 0;
-  hue += 4;  // speed of rainbow cycle
-
-  fill_rainbow(leds, NUM_LEDS, hue, 255 / NUM_LEDS);
-  FastLED.show();
 }
 
 /*
@@ -360,7 +350,11 @@ void loop() {
     setMotorsEnabled(true);
 
     Serial.println("Running preset");
+    fill_solid(leds, NUM_LEDS, CRGB::Red);
+    FastLED.show();
     runPreset(active_preset);
+    fill_solid(leds, NUM_LEDS, CRGB::Green);
+    FastLED.show();
 
     // clean shutdown
     for (uint8_t m = 0; m < NUM_MOTORS; m++) {
@@ -385,7 +379,7 @@ inline void doCenter() {
 
   for (uint8_t m = 0; m < NUM_MOTORS; m++) {
     digitalWrite(DIR_PINS[m], RETRACT);
-    analogWrite(PWM_PINS[m], MAX_PWM);
+    analogWrite(PWM_PINS[m], CENTER_PWM);
   }
 
   delay(RESET_DELAY);
