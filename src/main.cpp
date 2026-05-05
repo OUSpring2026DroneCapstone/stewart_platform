@@ -60,7 +60,7 @@ float TY[3] = {0, 3, 2};
 float TZ[3] = {0, 0, 5};
 
 float zero_length = 0.0f;
-float dur = 4.0f;
+float dur = 8.0f;
 
 bool stop_requested = false;
 bool centered = false;
@@ -307,7 +307,7 @@ void setup() {
   fill_solid(leds, NUM_LEDS, CRGB::Red);
   FastLED.show();
   delay(500);
-  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  fill_solid(leds, NUM_LEDS, CRGB::Green);
   FastLED.show();
 
   // System ready for commands via serial
@@ -350,16 +350,15 @@ void loop() {
     setMotorsEnabled(true);
 
     Serial.println("Running preset");
-    fill_solid(leds, NUM_LEDS, CRGB::Red);
-    FastLED.show();
     runPreset(active_preset);
-    fill_solid(leds, NUM_LEDS, CRGB::Green);
-    FastLED.show();
 
     // clean shutdown
     for (uint8_t m = 0; m < NUM_MOTORS; m++) {
       analogWrite(PWM_PINS[m], 0);
     }
+
+    fill_solid(leds, NUM_LEDS, CRGB::Green);
+    FastLED.show();
 
     setMotorsEnabled(false);
     mode = MODE_IDLE;
@@ -377,6 +376,9 @@ inline void doCenter() {
   stop_requested = false;
   setMotorsEnabled(true);
 
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+
   for (uint8_t m = 0; m < NUM_MOTORS; m++) {
     digitalWrite(DIR_PINS[m], RETRACT);
     analogWrite(PWM_PINS[m], CENTER_PWM);
@@ -387,6 +389,9 @@ inline void doCenter() {
   for (uint8_t m = 0; m < NUM_MOTORS; m++) {
     analogWrite(PWM_PINS[m], 0);
   }
+
+  fill_solid(leds, NUM_LEDS, CRGB::Green);
+  FastLED.show();
 
   setMotorsEnabled(false);
   centered = true;
@@ -691,6 +696,9 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
 
   static float vel_filter_state[NUM_MOTORS] = {0};
 
+  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  FastLED.show();
+
   for (int step = 0; step <= steps; step++) {
 
     checkTextCommands();
@@ -700,7 +708,8 @@ inline void moveplat(float duration, float length_min, float pos0[3], float pos1
         analogWrite(PWM_PINS[m], 0);
       }
       setMotorsEnabled(false);
-      stop_requested = false;
+      fill_solid(leds, NUM_LEDS, CRGB::Green);
+      FastLED.show();
       return;
     }
 
